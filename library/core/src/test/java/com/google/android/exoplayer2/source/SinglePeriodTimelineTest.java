@@ -17,9 +17,11 @@ package com.google.android.exoplayer2.source;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import android.net.Uri;
 import android.util.Pair;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.C;
+import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.Timeline.Period;
 import com.google.android.exoplayer2.Timeline.Window;
 import org.junit.Before;
@@ -40,10 +42,15 @@ public final class SinglePeriodTimelineTest {
   }
 
   @Test
-  public void testGetPeriodPositionDynamicWindowUnknownDuration() {
+  public void getPeriodPositionDynamicWindowUnknownDuration() {
     SinglePeriodTimeline timeline =
         new SinglePeriodTimeline(
-            C.TIME_UNSET, /* isSeekable= */ false, /* isDynamic= */ true, /* isLive= */ true);
+            C.TIME_UNSET,
+            /* isSeekable= */ false,
+            /* isDynamic= */ true,
+            /* isLive= */ true,
+            /* manifest= */ null,
+            MediaItem.fromUri(Uri.EMPTY));
     // Should return null with any positive position projection.
     Pair<Object, Long> position = timeline.getPeriodPosition(window, period, 0, C.TIME_UNSET, 1);
     assertThat(position).isNull();
@@ -54,7 +61,7 @@ public final class SinglePeriodTimelineTest {
   }
 
   @Test
-  public void testGetPeriodPositionDynamicWindowKnownDuration() {
+  public void getPeriodPositionDynamicWindowKnownDuration() {
     long windowDurationUs = 1000;
     SinglePeriodTimeline timeline =
         new SinglePeriodTimeline(
@@ -66,7 +73,7 @@ public final class SinglePeriodTimelineTest {
             /* isDynamic= */ true,
             /* isLive= */ true,
             /* manifest= */ null,
-            /* tag= */ null);
+            MediaItem.fromUri(Uri.EMPTY));
     // Should return null with a positive position projection beyond window duration.
     Pair<Object, Long> position =
         timeline.getPeriodPosition(window, period, 0, C.TIME_UNSET, windowDurationUs + 1);
@@ -90,7 +97,7 @@ public final class SinglePeriodTimelineTest {
             /* isDynamic= */ false,
             /* isLive= */ false,
             /* manifest= */ null,
-            /* tag= */ null);
+            /* tag= */ (Object) null);
 
     assertThat(timeline.getWindow(/* windowIndex= */ 0, window).tag).isNull();
     assertThat(timeline.getPeriod(/* periodIndex= */ 0, period, /* setIds= */ false).id).isNull();
@@ -115,6 +122,26 @@ public final class SinglePeriodTimelineTest {
     assertThat(timeline.getWindow(/* windowIndex= */ 0, window).tag).isEqualTo(tag);
   }
 
+  // Tests backward compatibility.
+  @SuppressWarnings("deprecation")
+  @Test
+  public void getWindow_setsMediaItemAndTag() {
+    MediaItem mediaItem = new MediaItem.Builder().setUri(Uri.EMPTY).setTag(new Object()).build();
+    SinglePeriodTimeline timeline =
+        new SinglePeriodTimeline(
+            /* durationUs= */ C.TIME_UNSET,
+            /* isSeekable= */ false,
+            /* isDynamic= */ false,
+            /* isLive= */ false,
+            /* manifest= */ null,
+            mediaItem);
+
+    Window window = timeline.getWindow(/* windowIndex= */ 0, this.window);
+
+    assertThat(window.mediaItem).isEqualTo(mediaItem);
+    assertThat(window.tag).isEqualTo(mediaItem.playbackProperties.tag);
+  }
+
   @Test
   public void getIndexOfPeriod_returnsPeriod() {
     SinglePeriodTimeline timeline =
@@ -124,7 +151,7 @@ public final class SinglePeriodTimelineTest {
             /* isDynamic= */ false,
             /* isLive= */ false,
             /* manifest= */ null,
-            /* tag= */ null);
+            MediaItem.fromUri(Uri.EMPTY));
     Object uid = timeline.getPeriod(/* periodIndex= */ 0, period, /* setIds= */ true).uid;
 
     assertThat(timeline.getIndexOfPeriod(uid)).isEqualTo(0);

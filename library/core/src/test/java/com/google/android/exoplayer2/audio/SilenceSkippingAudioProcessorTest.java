@@ -37,7 +37,7 @@ public final class SilenceSkippingAudioProcessorTest {
           /* sampleRate= */ 1000, /* channelCount= */ 2, /* encoding= */ C.ENCODING_PCM_16BIT);
   private static final int TEST_SIGNAL_SILENCE_DURATION_MS = 1000;
   private static final int TEST_SIGNAL_NOISE_DURATION_MS = 1000;
-  private static final int TEST_SIGNAL_FRAME_COUNT = 100000;
+  private static final int TEST_SIGNAL_FRAME_COUNT = 100_000;
 
   private static final int INPUT_BUFFER_SIZE = 100;
 
@@ -49,7 +49,7 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testEnabledProcessor_isActive() throws Exception {
+  public void enabledProcessor_isActive() throws Exception {
     // Given an enabled processor.
     silenceSkippingAudioProcessor.setEnabled(true);
 
@@ -61,7 +61,7 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testDisabledProcessor_isNotActive() throws Exception {
+  public void disabledProcessor_isNotActive() throws Exception {
     // Given a disabled processor.
     silenceSkippingAudioProcessor.setEnabled(false);
 
@@ -73,7 +73,7 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testDefaultProcessor_isNotEnabled() throws Exception {
+  public void defaultProcessor_isNotEnabled() throws Exception {
     // Given a processor in its default state.
     // When reconfigured.
     silenceSkippingAudioProcessor.configure(AUDIO_FORMAT);
@@ -83,7 +83,7 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testSkipInSilentSignal_skipsEverything() throws Exception {
+  public void skipInSilentSignal_skipsEverything() throws Exception {
     // Given a signal with only noise.
     InputBufferProvider inputBufferProvider =
         getInputBufferProviderForAlternatingSilenceAndNoise(
@@ -105,7 +105,7 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testSkipInNoisySignal_skipsNothing() throws Exception {
+  public void skipInNoisySignal_skipsNothing() throws Exception {
     // Given a signal with only silence.
     InputBufferProvider inputBufferProvider =
         getInputBufferProviderForAlternatingSilenceAndNoise(
@@ -129,8 +129,7 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testSkipInAlternatingTestSignal_hasCorrectOutputAndSkippedFrameCounts()
-      throws Exception {
+  public void skipInAlternatingTestSignal_hasCorrectOutputAndSkippedFrameCounts() throws Exception {
     // Given a signal that alternates between silence and noise.
     InputBufferProvider inputBufferProvider =
         getInputBufferProviderForAlternatingSilenceAndNoise(
@@ -154,7 +153,7 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testSkipWithSmallerInputBufferSize_hasCorrectOutputAndSkippedFrameCounts()
+  public void skipWithSmallerInputBufferSize_hasCorrectOutputAndSkippedFrameCounts()
       throws Exception {
     // Given a signal that alternates between silence and noise.
     InputBufferProvider inputBufferProvider =
@@ -179,7 +178,7 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testSkipWithLargerInputBufferSize_hasCorrectOutputAndSkippedFrameCounts()
+  public void skipWithLargerInputBufferSize_hasCorrectOutputAndSkippedFrameCounts()
       throws Exception {
     // Given a signal that alternates between silence and noise.
     InputBufferProvider inputBufferProvider =
@@ -204,7 +203,34 @@ public final class SilenceSkippingAudioProcessorTest {
   }
 
   @Test
-  public void testSkipThenFlush_resetsSkippedFrameCount() throws Exception {
+  public void customPaddingValue_hasCorrectOutputAndSkippedFrameCounts() throws Exception {
+    // Given a signal that alternates between silence and noise.
+    InputBufferProvider inputBufferProvider =
+        getInputBufferProviderForAlternatingSilenceAndNoise(
+            TEST_SIGNAL_SILENCE_DURATION_MS,
+            TEST_SIGNAL_NOISE_DURATION_MS,
+            TEST_SIGNAL_FRAME_COUNT);
+
+    // When processing the entire signal with a larger than normal padding silence.
+    SilenceSkippingAudioProcessor silenceSkippingAudioProcessor =
+        new SilenceSkippingAudioProcessor(
+            SilenceSkippingAudioProcessor.DEFAULT_MINIMUM_SILENCE_DURATION_US,
+            /* paddingSilenceUs= */ 21_000,
+            SilenceSkippingAudioProcessor.DEFAULT_SILENCE_THRESHOLD_LEVEL);
+    silenceSkippingAudioProcessor.setEnabled(true);
+    silenceSkippingAudioProcessor.configure(AUDIO_FORMAT);
+    silenceSkippingAudioProcessor.flush();
+    assertThat(silenceSkippingAudioProcessor.isActive()).isTrue();
+    long totalOutputFrames =
+        process(silenceSkippingAudioProcessor, inputBufferProvider, /* inputBufferSize= */ 120);
+
+    // The right number of frames are skipped/output.
+    assertThat(totalOutputFrames).isEqualTo(58379);
+    assertThat(silenceSkippingAudioProcessor.getSkippedFrames()).isEqualTo(41621);
+  }
+
+  @Test
+  public void skipThenFlush_resetsSkippedFrameCount() throws Exception {
     // Given a signal that alternates between silence and noise.
     InputBufferProvider inputBufferProvider =
         getInputBufferProviderForAlternatingSilenceAndNoise(

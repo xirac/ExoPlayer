@@ -49,7 +49,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /** A runner for {@link MediaSource} tests. */
 public class MediaSourceTestRunner {
 
-  public static final int TIMEOUT_MS = 10000;
+  public static final int TIMEOUT_MS = 10_000;
 
   private final MediaSource mediaSource;
   private final MediaSourceListener mediaSourceListener;
@@ -71,7 +71,7 @@ public class MediaSourceTestRunner {
   public MediaSourceTestRunner(MediaSource mediaSource, Allocator allocator) {
     this.mediaSource = mediaSource;
     this.allocator = allocator;
-    playbackThread = new HandlerThread("PlaybackThread");
+    playbackThread = new HandlerThread("TestHandler");
     playbackThread.start();
     Looper playbackLooper = playbackThread.getLooper();
     playbackHandler = new Handler(playbackLooper);
@@ -215,7 +215,7 @@ public class MediaSourceTestRunner {
    * runner was created if neither method has been called).
    */
   public void assertNoTimelineChange() {
-    assertThat(timelines.isEmpty()).isTrue();
+    assertThat(timelines).isEmpty();
   }
 
   /**
@@ -304,8 +304,10 @@ public class MediaSourceTestRunner {
     List<Integer> expectedWindowIndices = new ArrayList<>(Arrays.asList(windowIndices));
     for (Pair<Integer, MediaPeriodId> windowIndexAndMediaPeriodId : completedLoads) {
       if (windowIndexAndMediaPeriodId.second == null) {
-        boolean loadExpected = expectedWindowIndices.remove(windowIndexAndMediaPeriodId.first);
-        assertThat(loadExpected).isTrue();
+        assertWithMessage("Missing expected load")
+            .that(expectedWindowIndices)
+            .contains(windowIndexAndMediaPeriodId.first);
+        expectedWindowIndices.remove(windowIndexAndMediaPeriodId.first);
       }
     }
     assertWithMessage("Not all expected media source loads have been completed.")

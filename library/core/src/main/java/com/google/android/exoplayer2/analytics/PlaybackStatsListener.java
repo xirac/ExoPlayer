@@ -20,7 +20,6 @@ import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.Format;
-import com.google.android.exoplayer2.PlaybackParameters;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.Timeline.Period;
@@ -51,7 +50,7 @@ import java.util.Map;
  * <p>For accurate measurements, the listener should be added to the player before loading media,
  * i.e., {@link Player#getPlaybackState()} should be {@link Player#STATE_IDLE}.
  *
- * <p>Playback stats are gathered separately for all playback session, i.e. each window in the
+ * <p>Playback stats are gathered separately for each playback session, i.e. each window in the
  * {@link Timeline} and each single ad.
  */
 public final class PlaybackStatsListener
@@ -84,7 +83,7 @@ public final class PlaybackStatsListener
   @Player.State private int playbackState;
   private boolean isSuppressed;
   private float playbackSpeed;
-  private boolean isSeeking;
+  private boolean onSeekStartedCalled;
 
   /**
    * Creates listener for playback stats.
@@ -133,6 +132,7 @@ public final class PlaybackStatsListener
    */
   @Nullable
   public PlaybackStats getPlaybackStats() {
+    @Nullable
     PlaybackStatsTracker activeStatsTracker =
         activeAdPlayback != null
             ? playbackStatsTrackers.get(activeAdPlayback)
@@ -150,7 +150,6 @@ public final class PlaybackStatsListener
     // TODO: Add AnalyticsListener.onAttachedToPlayer and onDetachedFromPlayer to auto-release with
     // an actual EventTime. Should also simplify other cases where the listener needs to be released
     // separately from the player.
-    HashMap<String, PlaybackStatsTracker> trackerCopy = new HashMap<>(playbackStatsTrackers);
     EventTime dummyEventTime =
         new EventTime(
             SystemClock.elapsedRealtime(),
@@ -158,11 +157,12 @@ public final class PlaybackStatsListener
             /* windowIndex= */ 0,
             /* mediaPeriodId= */ null,
             /* eventPlaybackPositionMs= */ 0,
+            Timeline.EMPTY,
+            /* currentWindowIndex= */ 0,
+            /* currentMediaPeriodId= */ null,
             /* currentPlaybackPositionMs= */ 0,
             /* totalBufferedDurationMs= */ 0);
-    for (String session : trackerCopy.keySet()) {
-      onSessionFinished(dummyEventTime, session, /* automaticTransition= */ false);
-    }
+    sessionManager.finishAllSessions(dummyEventTime);
   }
 
   // PlaybackSessionManager.Listener implementation.
@@ -170,11 +170,11 @@ public final class PlaybackStatsListener
   @Override
   public void onSessionCreated(EventTime eventTime, String session) {
     PlaybackStatsTracker tracker = new PlaybackStatsTracker(keepHistory, eventTime);
-    if (isSeeking) {
+    if (onSeekStartedCalled) {
       tracker.onSeekStarted(eventTime, /* belongsToPlayback= */ true);
     }
-    tracker.onPlayerStateChanged(
-        eventTime, playWhenReady, playbackState, /* belongsToPlayback= */ true);
+    tracker.onPlaybackStateChanged(eventTime, playbackState, /* belongsToPlayback= */ true);
+    tracker.onPlayWhenReadyChanged(eventTime, playWhenReady, /* belongsToPlayback= */ true);
     tracker.onIsSuppressedChanged(eventTime, isSuppressed, /* belongsToPlayback= */ true);
     tracker.onPlaybackSpeedChanged(eventTime, playbackSpeed);
     playbackStatsTrackers.put(session, tracker);
@@ -194,11 +194,15 @@ public final class PlaybackStatsListener
   @Override
   public void onAdPlaybackStarted(EventTime eventTime, String contentSession, String adSession) {
     Assertions.checkState(Assertions.checkNotNull(eventTime.mediaPeriodId).isAd());
-    long contentPositionUs =
+    long contentPeriodPositionUs =
         eventTime
             .timeline
             .getPeriodByUid(eventTime.mediaPeriodId.periodUid, period)
             .getAdGroupTimeUs(eventTime.mediaPeriodId.adGroupIndex);
+    long contentWindowPositionUs =
+        contentPeriodPositionUs == C.TIME_END_OF_SOURCE
+            ? C.TIME_END_OF_SOURCE
+            : contentPeriodPositionUs + period.getPositionInWindowUs();
     EventTime contentEventTime =
         new EventTime(
             eventTime.realtimeMs,
@@ -208,7 +212,10 @@ public final class PlaybackStatsListener
                 eventTime.mediaPeriodId.periodUid,
                 eventTime.mediaPeriodId.windowSequenceNumber,
                 eventTime.mediaPeriodId.adGroupIndex),
-            /* eventPlaybackPositionMs= */ C.usToMs(contentPositionUs),
+            /* eventPlaybackPositionMs= */ C.usToMs(contentWindowPositionUs),
+            eventTime.timeline,
+            eventTime.currentWindowIndex,
+            eventTime.currentMediaPeriodId,
             eventTime.currentPlaybackPositionMs,
             eventTime.totalBufferedDurationMs);
     Assertions.checkNotNull(playbackStatsTrackers.get(contentSession))
@@ -226,8 +233,7 @@ public final class PlaybackStatsListener
     EventTime startEventTime = Assertions.checkNotNull(sessionStartEventTimes.remove(session));
     if (automaticTransition) {
       // Simulate ENDED state to record natural ending of playback.
-      tracker.onPlayerStateChanged(
-          eventTime, /* playWhenReady= */ true, Player.STATE_ENDED, /* belongsToPlayback= */ false);
+      tracker.onPlaybackStateChanged(eventTime, Player.STATE_ENDED, /* belongsToPlayback= */ false);
     }
     tracker.onFinished(eventTime);
     PlaybackStats playbackStats = tracker.build(/* isFinal= */ true);
@@ -240,24 +246,35 @@ public final class PlaybackStatsListener
   // AnalyticsListener implementation.
 
   @Override
-  public void onPlayerStateChanged(
-      EventTime eventTime, boolean playWhenReady, @Player.State int playbackState) {
-    this.playWhenReady = playWhenReady;
-    this.playbackState = playbackState;
-    sessionManager.updateSessions(eventTime);
+  public void onPlaybackStateChanged(EventTime eventTime, @Player.State int state) {
+    playbackState = state;
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       boolean belongsToPlayback = sessionManager.belongsToSession(eventTime, session);
       playbackStatsTrackers
           .get(session)
-          .onPlayerStateChanged(eventTime, playWhenReady, playbackState, belongsToPlayback);
+          .onPlaybackStateChanged(eventTime, playbackState, belongsToPlayback);
+    }
+  }
+
+  @Override
+  public void onPlayWhenReadyChanged(
+      EventTime eventTime, boolean playWhenReady, @Player.PlayWhenReadyChangeReason int reason) {
+    this.playWhenReady = playWhenReady;
+    maybeAddSession(eventTime);
+    for (String session : playbackStatsTrackers.keySet()) {
+      boolean belongsToPlayback = sessionManager.belongsToSession(eventTime, session);
+      playbackStatsTrackers
+          .get(session)
+          .onPlayWhenReadyChanged(eventTime, playWhenReady, belongsToPlayback);
     }
   }
 
   @Override
   public void onPlaybackSuppressionReasonChanged(
-      EventTime eventTime, int playbackSuppressionReason) {
+      EventTime eventTime, @Player.PlaybackSuppressionReason int playbackSuppressionReason) {
     isSuppressed = playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE;
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       boolean belongsToPlayback = sessionManager.belongsToSession(eventTime, session);
       playbackStatsTrackers
@@ -267,50 +284,46 @@ public final class PlaybackStatsListener
   }
 
   @Override
-  public void onTimelineChanged(EventTime eventTime, int reason) {
+  public void onTimelineChanged(EventTime eventTime, @Player.TimelineChangeReason int reason) {
     sessionManager.handleTimelineUpdate(eventTime);
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
-        playbackStatsTrackers.get(session).onPositionDiscontinuity(eventTime);
+        playbackStatsTrackers.get(session).onPositionDiscontinuity(eventTime, /* isSeek= */ false);
       }
     }
   }
 
   @Override
-  public void onPositionDiscontinuity(EventTime eventTime, int reason) {
+  public void onPositionDiscontinuity(EventTime eventTime, @Player.DiscontinuityReason int reason) {
     sessionManager.handlePositionDiscontinuity(eventTime, reason);
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
+    if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+      onSeekStartedCalled = false;
+    }
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
-        playbackStatsTrackers.get(session).onPositionDiscontinuity(eventTime);
+        playbackStatsTrackers
+            .get(session)
+            .onPositionDiscontinuity(
+                eventTime, /* isSeek= */ reason == Player.DISCONTINUITY_REASON_SEEK);
       }
     }
   }
 
   @Override
   public void onSeekStarted(EventTime eventTime) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       boolean belongsToPlayback = sessionManager.belongsToSession(eventTime, session);
       playbackStatsTrackers.get(session).onSeekStarted(eventTime, belongsToPlayback);
     }
-    isSeeking = true;
-  }
-
-  @Override
-  public void onSeekProcessed(EventTime eventTime) {
-    sessionManager.updateSessions(eventTime);
-    for (String session : playbackStatsTrackers.keySet()) {
-      boolean belongsToPlayback = sessionManager.belongsToSession(eventTime, session);
-      playbackStatsTrackers.get(session).onSeekProcessed(eventTime, belongsToPlayback);
-    }
-    isSeeking = false;
+    onSeekStartedCalled = true;
   }
 
   @Override
   public void onPlayerError(EventTime eventTime, ExoPlaybackException error) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onFatalError(eventTime, error);
@@ -319,10 +332,9 @@ public final class PlaybackStatsListener
   }
 
   @Override
-  public void onPlaybackParametersChanged(
-      EventTime eventTime, PlaybackParameters playbackParameters) {
-    playbackSpeed = playbackParameters.speed;
-    sessionManager.updateSessions(eventTime);
+  public void onPlaybackSpeedChanged(EventTime eventTime, float playbackSpeed) {
+    this.playbackSpeed = playbackSpeed;
+    maybeAddSession(eventTime);
     for (PlaybackStatsTracker tracker : playbackStatsTrackers.values()) {
       tracker.onPlaybackSpeedChanged(eventTime, playbackSpeed);
     }
@@ -331,7 +343,7 @@ public final class PlaybackStatsListener
   @Override
   public void onTracksChanged(
       EventTime eventTime, TrackGroupArray trackGroups, TrackSelectionArray trackSelections) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onTracksChanged(eventTime, trackSelections);
@@ -342,7 +354,7 @@ public final class PlaybackStatsListener
   @Override
   public void onLoadStarted(
       EventTime eventTime, LoadEventInfo loadEventInfo, MediaLoadData mediaLoadData) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onLoadStarted(eventTime);
@@ -352,7 +364,7 @@ public final class PlaybackStatsListener
 
   @Override
   public void onDownstreamFormatChanged(EventTime eventTime, MediaLoadData mediaLoadData) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onDownstreamFormatChanged(eventTime, mediaLoadData);
@@ -367,7 +379,7 @@ public final class PlaybackStatsListener
       int height,
       int unappliedRotationDegrees,
       float pixelWidthHeightRatio) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onVideoSizeChanged(eventTime, width, height);
@@ -378,7 +390,7 @@ public final class PlaybackStatsListener
   @Override
   public void onBandwidthEstimate(
       EventTime eventTime, int totalLoadTimeMs, long totalBytesLoaded, long bitrateEstimate) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onBandwidthData(totalLoadTimeMs, totalBytesLoaded);
@@ -389,7 +401,7 @@ public final class PlaybackStatsListener
   @Override
   public void onAudioUnderrun(
       EventTime eventTime, int bufferSize, long bufferSizeMs, long elapsedSinceLastFeedMs) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onAudioUnderrun();
@@ -399,7 +411,7 @@ public final class PlaybackStatsListener
 
   @Override
   public void onDroppedVideoFrames(EventTime eventTime, int droppedFrames, long elapsedMs) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onDroppedVideoFrames(droppedFrames);
@@ -414,7 +426,7 @@ public final class PlaybackStatsListener
       MediaLoadData mediaLoadData,
       IOException error,
       boolean wasCanceled) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onNonFatalError(eventTime, error);
@@ -424,11 +436,18 @@ public final class PlaybackStatsListener
 
   @Override
   public void onDrmSessionManagerError(EventTime eventTime, Exception error) {
-    sessionManager.updateSessions(eventTime);
+    maybeAddSession(eventTime);
     for (String session : playbackStatsTrackers.keySet()) {
       if (sessionManager.belongsToSession(eventTime, session)) {
         playbackStatsTrackers.get(session).onNonFatalError(eventTime, error);
       }
+    }
+  }
+
+  private void maybeAddSession(EventTime eventTime) {
+    boolean isCompletelyIdle = eventTime.timeline.isEmpty() && playbackState == Player.STATE_IDLE;
+    if (!isCompletelyIdle) {
+      sessionManager.updateSessions(eventTime);
     }
   }
 
@@ -518,27 +537,39 @@ public final class PlaybackStatsListener
     }
 
     /**
-     * Notifies the tracker of a player state change event, including all player state changes while
-     * the playback is not in the foreground.
+     * Notifies the tracker of a playback state change event, including all playback state changes
+     * while the playback is not in the foreground.
+     *
+     * @param eventTime The {@link EventTime}.
+     * @param state The current {@link Player.State}.
+     * @param belongsToPlayback Whether the {@code eventTime} belongs to the current playback.
+     */
+    public void onPlaybackStateChanged(
+        EventTime eventTime, @Player.State int state, boolean belongsToPlayback) {
+      playerPlaybackState = state;
+      if (state != Player.STATE_IDLE) {
+        hasFatalError = false;
+      }
+      if (state != Player.STATE_BUFFERING) {
+        isSeeking = false;
+      }
+      if (state == Player.STATE_IDLE || state == Player.STATE_ENDED) {
+        isInterruptedByAd = false;
+      }
+      maybeUpdatePlaybackState(eventTime, belongsToPlayback);
+    }
+
+    /**
+     * Notifies the tracker of a play when ready change event, including all play when ready changes
+     * while the playback is not in the foreground.
      *
      * @param eventTime The {@link EventTime}.
      * @param playWhenReady Whether the playback will proceed when ready.
-     * @param playbackState The current {@link Player.State}.
      * @param belongsToPlayback Whether the {@code eventTime} belongs to the current playback.
      */
-    public void onPlayerStateChanged(
-        EventTime eventTime,
-        boolean playWhenReady,
-        @Player.State int playbackState,
-        boolean belongsToPlayback) {
+    public void onPlayWhenReadyChanged(
+        EventTime eventTime, boolean playWhenReady, boolean belongsToPlayback) {
       this.playWhenReady = playWhenReady;
-      playerPlaybackState = playbackState;
-      if (playbackState != Player.STATE_IDLE) {
-        hasFatalError = false;
-      }
-      if (playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) {
-        isInterruptedByAd = false;
-      }
       maybeUpdatePlaybackState(eventTime, belongsToPlayback);
     }
 
@@ -560,8 +591,12 @@ public final class PlaybackStatsListener
      * Notifies the tracker of a position discontinuity or timeline update for the current playback.
      *
      * @param eventTime The {@link EventTime}.
+     * @param isSeek Whether the position discontinuity is for a seek.
      */
-    public void onPositionDiscontinuity(EventTime eventTime) {
+    public void onPositionDiscontinuity(EventTime eventTime, boolean isSeek) {
+      if (isSeek && playerPlaybackState == Player.STATE_IDLE) {
+        isSeeking = false;
+      }
       isInterruptedByAd = false;
       maybeUpdatePlaybackState(eventTime, /* belongsToPlayback= */ true);
     }
@@ -575,18 +610,6 @@ public final class PlaybackStatsListener
      */
     public void onSeekStarted(EventTime eventTime, boolean belongsToPlayback) {
       isSeeking = true;
-      maybeUpdatePlaybackState(eventTime, belongsToPlayback);
-    }
-
-    /**
-     * Notifies the tracker that a seek has been processed, including all seeks while the playback
-     * is not in the foreground.
-     *
-     * @param eventTime The {@link EventTime}.
-     * @param belongsToPlayback Whether the {@code eventTime} belongs to the current playback.
-     */
-    public void onSeekProcessed(EventTime eventTime, boolean belongsToPlayback) {
-      isSeeking = false;
       maybeUpdatePlaybackState(eventTime, belongsToPlayback);
     }
 
@@ -699,7 +722,8 @@ public final class PlaybackStatsListener
      */
     public void onVideoSizeChanged(EventTime eventTime, int width, int height) {
       if (currentVideoFormat != null && currentVideoFormat.height == Format.NO_VALUE) {
-        Format formatWithHeight = currentVideoFormat.copyWithVideoSize(width, height);
+        Format formatWithHeight =
+            currentVideoFormat.buildUpon().setWidth(width).setHeight(height).build();
         maybeUpdateVideoFormat(eventTime, formatWithHeight);
       }
     }
@@ -904,10 +928,6 @@ public final class PlaybackStatsListener
             || currentPlaybackState == PlaybackStats.PLAYBACK_STATE_INTERRUPTED_BY_AD) {
           return PlaybackStats.PLAYBACK_STATE_JOINING_FOREGROUND;
         }
-        if (currentPlaybackState == PlaybackStats.PLAYBACK_STATE_SEEKING
-            || currentPlaybackState == PlaybackStats.PLAYBACK_STATE_SEEK_BUFFERING) {
-          return PlaybackStats.PLAYBACK_STATE_SEEK_BUFFERING;
-        }
         if (!playWhenReady) {
           return PlaybackStats.PLAYBACK_STATE_PAUSED_BUFFERING;
         }
@@ -940,6 +960,9 @@ public final class PlaybackStatsListener
     }
 
     private void maybeUpdateMediaTimeHistory(long realtimeMs, long mediaTimeMs) {
+      if (!keepHistory) {
+        return;
+      }
       if (currentPlaybackState != PlaybackStats.PLAYBACK_STATE_PLAYING) {
         if (mediaTimeMs == C.TIME_UNSET) {
           return;

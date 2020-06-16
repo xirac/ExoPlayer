@@ -16,10 +16,11 @@
 
 package com.google.android.exoplayer2.mediacodec;
 
-import static com.google.android.exoplayer2.mediacodec.MediaCodecTestUtils.areEqual;
-import static com.google.android.exoplayer2.mediacodec.MediaCodecTestUtils.waitUntilAllEventsAreExecuted;
+import static com.google.android.exoplayer2.testutil.TestUtil.assertBufferInfosEqual;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
+import static org.robolectric.Shadows.shadowOf;
+import static org.robolectric.annotation.LooperMode.Mode.LEGACY;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
@@ -27,30 +28,37 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import com.google.android.exoplayer2.C;
 import java.io.IOException;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Shadows;
+import org.robolectric.annotation.LooperMode;
+import org.robolectric.shadows.ShadowLooper;
 
 /** Unit tests for {@link AsynchronousMediaCodecAdapter}. */
+@LooperMode(LEGACY)
 @RunWith(AndroidJUnit4.class)
 public class AsynchronousMediaCodecAdapterTest {
   private AsynchronousMediaCodecAdapter adapter;
   private MediaCodec codec;
-  private HandlerThread handlerThread;
-  private Looper looper;
+  private TestHandlerThread handlerThread;
   private MediaCodec.BufferInfo bufferInfo;
 
   @Before
   public void setUp() throws IOException {
-    handlerThread = new HandlerThread("TestHandlerThread");
-    handlerThread.start();
-    looper = handlerThread.getLooper();
     codec = MediaCodec.createByCodecName("h264");
-    adapter = new AsynchronousMediaCodecAdapter(codec, looper);
+    handlerThread = new TestHandlerThread("TestHandlerThread");
+    adapter =
+        new AsynchronousMediaCodecAdapter(
+            codec,
+            /* enableAsynchronousQueueing= */ false,
+            /* trackType= */ C.TRACK_TYPE_VIDEO,
+            handlerThread);
     adapter.setCodecStartRunnable(() -> {});
     bufferInfo = new MediaCodec.BufferInfo();
   }
@@ -58,7 +66,31 @@ public class AsynchronousMediaCodecAdapterTest {
   @After
   public void tearDown() {
     adapter.shutdown();
-    handlerThread.quit();
+
+    assertThat(TestHandlerThread.INSTANCES_STARTED.get()).isEqualTo(0);
+  }
+
+  @Test
+  public void startAndShutdown_works() {
+    adapter.start();
+    adapter.shutdown();
+  }
+
+  @Test
+  public void dequeueInputBufferIndex_withAfterFlushFailed_throwsException() {
+    AtomicInteger codecStartCalls = new AtomicInteger(0);
+    adapter.setCodecStartRunnable(
+        () -> {
+          if (codecStartCalls.incrementAndGet() == 2) {
+            throw new IllegalStateException("codec#start() exception");
+          }
+        });
+    adapter.start();
+    adapter.flush();
+
+    // Wait until all tasks have been handled.
+    Shadows.shadowOf(handlerThread.getLooper()).idle();
+    assertThrows(IllegalStateException.class, () -> adapter.dequeueInputBufferIndex());
   }
 
   @Test
@@ -71,59 +103,66 @@ public class AsynchronousMediaCodecAdapterTest {
   @Test
   public void dequeueInputBufferIndex_withInputBuffer_returnsInputBuffer() {
     adapter.start();
-    adapter.getMediaCodecCallback().onInputBufferAvailable(codec, /* index=*/ 0);
+    adapter.onInputBufferAvailable(codec, 0);
 
     assertThat(adapter.dequeueInputBufferIndex()).isEqualTo(0);
   }
 
   @Test
-  public void dequeueInputBufferIndex_whileFlushing_returnsTryAgainLater() {
+  public void dequeueInputBufferIndex_withPendingFlush_returnsTryAgainLater() {
     adapter.start();
-    adapter.getMediaCodecCallback().onInputBufferAvailable(codec, /* index=*/ 0);
+    adapter.onInputBufferAvailable(codec, 0);
     adapter.flush();
-    adapter.getMediaCodecCallback().onInputBufferAvailable(codec, /* index=*/ 1);
 
     assertThat(adapter.dequeueInputBufferIndex()).isEqualTo(MediaCodec.INFO_TRY_AGAIN_LATER);
   }
 
   @Test
-  public void dequeueInputBufferIndex_afterFlushCompletes_returnsNextInputBuffer()
-      throws InterruptedException {
+  public void dequeueInputBufferIndex_withFlushCompletedAndInputBuffer_returnsInputBuffer() {
     adapter.start();
+    Looper looper = handlerThread.getLooper();
     Handler handler = new Handler(looper);
-    handler.post(
-        () -> adapter.getMediaCodecCallback().onInputBufferAvailable(codec, /* index=*/ 0));
-    adapter.flush(); // enqueues a flush event on the looper
-    handler.post(
-        () -> adapter.getMediaCodecCallback().onInputBufferAvailable(codec, /* index=*/ 1));
+    // Enqueue 10 callbacks from codec
+    for (int i = 0; i < 10; i++) {
+      int bufferIndex = i;
+      handler.post(() -> adapter.onInputBufferAvailable(codec, bufferIndex));
+    }
+    adapter.flush(); // Enqueues a flush event after the onInputBufferAvailable callbacks
+    // Enqueue another onInputBufferAvailable after the flush event
+    handler.post(() -> adapter.onInputBufferAvailable(codec, 10));
 
-    assertThat(waitUntilAllEventsAreExecuted(looper, /* time= */ 5, TimeUnit.SECONDS)).isTrue();
-    assertThat(adapter.dequeueInputBufferIndex()).isEqualTo(1);
+    // Wait until all tasks have been handled.
+    Shadows.shadowOf(handlerThread.getLooper()).idle();
+    assertThat(adapter.dequeueInputBufferIndex()).isEqualTo(10);
   }
 
   @Test
-  public void dequeueInputBufferIndex_afterFlushCompletesWithError_throwsException()
-      throws InterruptedException {
-    AtomicInteger calls = new AtomicInteger(0);
+  public void dequeueInputBufferIndex_withMediaCodecError_throwsException() {
+    adapter.start();
+    adapter.onMediaCodecError(new IllegalStateException("error from codec"));
+
+    assertThrows(IllegalStateException.class, () -> adapter.dequeueInputBufferIndex());
+  }
+
+  @Test
+  public void dequeueOutputBufferIndex_withInternalException_throwsException() {
+    AtomicInteger codecStartCalls = new AtomicInteger(0);
     adapter.setCodecStartRunnable(
         () -> {
-          if (calls.incrementAndGet() == 2) {
-            throw new IllegalStateException();
+          if (codecStartCalls.incrementAndGet() == 2) {
+            throw new RuntimeException("codec#start() exception");
           }
         });
     adapter.start();
     adapter.flush();
 
-    assertThat(waitUntilAllEventsAreExecuted(looper, /* time= */ 5, TimeUnit.SECONDS)).isTrue();
-    assertThrows(
-        IllegalStateException.class,
-        () -> {
-          adapter.dequeueInputBufferIndex();
-        });
+    // Wait until all tasks have been handled.
+    Shadows.shadowOf(handlerThread.getLooper()).idle();
+    assertThrows(IllegalStateException.class, () -> adapter.dequeueOutputBufferIndex(bufferInfo));
   }
 
   @Test
-  public void dequeueOutputBufferIndex_withoutOutputBuffer_returnsTryAgainLater() {
+  public void dequeueOutputBufferIndex_withoutInputBuffer_returnsTryAgainLater() {
     adapter.start();
 
     assertThat(adapter.dequeueOutputBufferIndex(bufferInfo))
@@ -133,106 +172,208 @@ public class AsynchronousMediaCodecAdapterTest {
   @Test
   public void dequeueOutputBufferIndex_withOutputBuffer_returnsOutputBuffer() {
     adapter.start();
-    MediaCodec.BufferInfo outBufferInfo = new MediaCodec.BufferInfo();
-    outBufferInfo.presentationTimeUs = 10;
-    adapter.getMediaCodecCallback().onOutputBufferAvailable(codec, /* index=*/ 0, outBufferInfo);
+    MediaCodec.BufferInfo enqueuedBufferInfo = new MediaCodec.BufferInfo();
+    adapter.onOutputBufferAvailable(codec, 0, enqueuedBufferInfo);
 
-    assertThat(adapter.dequeueOutputBufferIndex(bufferInfo)).isEqualTo(0);
-    assertThat(areEqual(bufferInfo, outBufferInfo)).isTrue();
+    assertThat(adapter.dequeueOutputBufferIndex((bufferInfo))).isEqualTo(0);
+    assertBufferInfosEqual(enqueuedBufferInfo, bufferInfo);
   }
 
   @Test
-  public void dequeueOutputBufferIndex_whileFlushing_returnsTryAgainLater() {
+  public void dequeueOutputBufferIndex_withPendingFlush_returnsTryAgainLater() {
     adapter.start();
-    adapter.getMediaCodecCallback().onOutputBufferAvailable(codec, /* index=*/ 0, bufferInfo);
+    adapter.dequeueOutputBufferIndex(bufferInfo);
     adapter.flush();
-    adapter.getMediaCodecCallback().onOutputBufferAvailable(codec, /* index=*/ 1, bufferInfo);
 
     assertThat(adapter.dequeueOutputBufferIndex(bufferInfo))
         .isEqualTo(MediaCodec.INFO_TRY_AGAIN_LATER);
   }
 
   @Test
-  public void dequeueOutputBufferIndex_afterFlushCompletes_returnsNextOutputBuffer()
-      throws InterruptedException {
+  public void dequeueOutputBufferIndex_withFlushCompletedAndOutputBuffer_returnsOutputBuffer() {
     adapter.start();
+    Looper looper = handlerThread.getLooper();
     Handler handler = new Handler(looper);
-    MediaCodec.BufferInfo info0 = new MediaCodec.BufferInfo();
-    handler.post(
-        () -> adapter.getMediaCodecCallback().onOutputBufferAvailable(codec, /* index=*/ 0, info0));
-    adapter.flush(); // enqueues a flush event on the looper
-    MediaCodec.BufferInfo info1 = new MediaCodec.BufferInfo();
-    info1.presentationTimeUs = 1;
-    handler.post(
-        () -> adapter.getMediaCodecCallback().onOutputBufferAvailable(codec, /* index=*/ 1, info1));
+    // Enqueue 10 callbacks from codec
+    for (int i = 0; i < 10; i++) {
+      int bufferIndex = i;
+      MediaCodec.BufferInfo outBufferInfo = new MediaCodec.BufferInfo();
+      outBufferInfo.presentationTimeUs = i;
+      handler.post(() -> adapter.onOutputBufferAvailable(codec, bufferIndex, outBufferInfo));
+    }
+    adapter.flush(); // Enqueues a flush event after the onOutputBufferAvailable callbacks
+    // Enqueue another onOutputBufferAvailable after the flush event
+    MediaCodec.BufferInfo lastBufferInfo = new MediaCodec.BufferInfo();
+    lastBufferInfo.presentationTimeUs = 10;
+    handler.post(() -> adapter.onOutputBufferAvailable(codec, 10, lastBufferInfo));
 
-    assertThat(waitUntilAllEventsAreExecuted(looper, /* time= */ 5, TimeUnit.SECONDS)).isTrue();
-    assertThat(adapter.dequeueOutputBufferIndex(bufferInfo)).isEqualTo(1);
-    assertThat(areEqual(bufferInfo, info1)).isTrue();
+    // Wait until all tasks have been handled.
+    Shadows.shadowOf(handlerThread.getLooper()).idle();
+    assertThat(adapter.dequeueOutputBufferIndex(bufferInfo)).isEqualTo(10);
+    assertBufferInfosEqual(lastBufferInfo, bufferInfo);
   }
 
   @Test
-  public void dequeueOutputBufferIndex_afterFlushCompletesWithError_throwsException()
-      throws InterruptedException {
-    AtomicInteger calls = new AtomicInteger(0);
-    adapter.setCodecStartRunnable(
-        () -> {
-          if (calls.incrementAndGet() == 2) {
-            throw new RuntimeException("codec#start() exception");
-          }
-        });
+  public void dequeueOutputBufferIndex_withMediaCodecError_throwsException() {
     adapter.start();
-    adapter.flush();
+    adapter.onMediaCodecError(new IllegalStateException("error from codec"));
 
-    assertThat(waitUntilAllEventsAreExecuted(looper, /* time= */ 5, TimeUnit.SECONDS)).isTrue();
     assertThrows(IllegalStateException.class, () -> adapter.dequeueOutputBufferIndex(bufferInfo));
   }
 
   @Test
-  public void getOutputFormat_withMultipleFormats_returnsFormatsInCorrectOrder() {
+  public void dequeueOutputBufferIndex_withPendingOutputFormat_returnsPendingOutputFormat() {
     adapter.start();
-    MediaFormat[] formats = new MediaFormat[10];
-    MediaCodec.Callback mediaCodecCallback = adapter.getMediaCodecCallback();
-    for (int i = 0; i < formats.length; i++) {
-      formats[i] = new MediaFormat();
-      mediaCodecCallback.onOutputFormatChanged(codec, formats[i]);
-    }
+    MediaCodec.BufferInfo outputBufferInfo = new MediaCodec.BufferInfo();
+    MediaFormat pendingMediaFormat = new MediaFormat();
 
-    for (MediaFormat format : formats) {
-      assertThat(adapter.dequeueOutputBufferIndex(bufferInfo))
-          .isEqualTo(MediaCodec.INFO_OUTPUT_FORMAT_CHANGED);
-      assertThat(adapter.getOutputFormat()).isEqualTo(format);
-      // Call it again to ensure same format is returned
-      assertThat(adapter.getOutputFormat()).isEqualTo(format);
-    }
-    // Obtain next output buffer
-    assertThat(adapter.dequeueOutputBufferIndex(bufferInfo))
-        .isEqualTo(MediaCodec.INFO_TRY_AGAIN_LATER);
-    // Format should remain as is
-    assertThat(adapter.getOutputFormat()).isEqualTo(formats[formats.length - 1]);
+    adapter.onOutputFormatChanged(codec, new MediaFormat());
+    adapter.onOutputBufferAvailable(codec, /* index= */ 0, new MediaCodec.BufferInfo());
+    adapter.onOutputFormatChanged(codec, pendingMediaFormat);
+    adapter.onOutputBufferAvailable(codec, /* index= */ 1, new MediaCodec.BufferInfo());
+    // Flush should clear the output queue except from the last pending output format received.
+    adapter.flush();
+    shadowOf(handlerThread.getLooper()).idle();
+    adapter.onOutputBufferAvailable(codec, /* index= */ 2, new MediaCodec.BufferInfo());
+
+    assertThat(adapter.dequeueOutputBufferIndex(outputBufferInfo))
+        .isEqualTo(MediaCodec.INFO_OUTPUT_FORMAT_CHANGED);
+    assertThat(adapter.getOutputFormat()).isEqualTo(pendingMediaFormat);
+    assertThat(adapter.dequeueOutputBufferIndex(outputBufferInfo)).isEqualTo(2);
   }
 
   @Test
-  public void getOutputFormat_afterFlush_returnsPreviousFormat() throws InterruptedException {
+  public void dequeueOutputBufferIndex_withPendingAndNewOutputFormat_returnsNewOutputFormat() {
     adapter.start();
+    MediaCodec.BufferInfo outputBufferInfo = new MediaCodec.BufferInfo();
+    MediaFormat pendingMediaFormat = new MediaFormat();
+    MediaFormat latestOutputFormat = new MediaFormat();
+
+    adapter.onOutputFormatChanged(codec, new MediaFormat());
+    adapter.onOutputBufferAvailable(codec, /* index= */ 0, new MediaCodec.BufferInfo());
+    adapter.onOutputFormatChanged(codec, pendingMediaFormat);
+    adapter.onOutputBufferAvailable(codec, /* index= */ 1, new MediaCodec.BufferInfo());
+    // Flush should clear the output queue except from the last pending output format received.
+    adapter.flush();
+    shadowOf(handlerThread.getLooper()).idle();
+    // New output format should overwrite the pending format.
+    adapter.onOutputFormatChanged(codec, latestOutputFormat);
+
+    assertThat(adapter.dequeueOutputBufferIndex(outputBufferInfo))
+        .isEqualTo(MediaCodec.INFO_OUTPUT_FORMAT_CHANGED);
+    assertThat(adapter.getOutputFormat()).isEqualTo(latestOutputFormat);
+  }
+
+  @Test
+  public void getOutputFormat_withoutFormatReceived_throwsException() {
+    adapter.start();
+
+    assertThrows(IllegalStateException.class, () -> adapter.getOutputFormat());
+  }
+
+  @Test
+  public void getOutputFormat_withMultipleFormats_returnsCorrectFormat() {
+    adapter.start();
+    MediaFormat[] formats = new MediaFormat[10];
+    for (int i = 0; i < formats.length; i++) {
+      formats[i] = new MediaFormat();
+      adapter.onOutputFormatChanged(codec, formats[i]);
+    }
+
+    for (int i = 0; i < 10; i++) {
+      assertThat(adapter.dequeueOutputBufferIndex(bufferInfo))
+          .isEqualTo(MediaCodec.INFO_OUTPUT_FORMAT_CHANGED);
+      assertThat(adapter.getOutputFormat()).isEqualTo(formats[i]);
+      // A subsequent call to getOutputFormat() should return the previously fetched format
+      assertThat(adapter.getOutputFormat()).isEqualTo(formats[i]);
+    }
+    assertThat(adapter.dequeueOutputBufferIndex(bufferInfo))
+        .isEqualTo(MediaCodec.INFO_TRY_AGAIN_LATER);
+  }
+
+  @Test
+  public void getOutputFormat_afterFlush_returnsPreviousFormat() {
     MediaFormat format = new MediaFormat();
-    adapter.getMediaCodecCallback().onOutputFormatChanged(codec, format);
-    adapter.dequeueOutputBufferIndex(bufferInfo);
+    adapter.start();
+    adapter.onOutputFormatChanged(codec, format);
+
+    assertThat(adapter.dequeueOutputBufferIndex(bufferInfo))
+        .isEqualTo(MediaCodec.INFO_OUTPUT_FORMAT_CHANGED);
+    assertThat(adapter.getOutputFormat()).isEqualTo(format);
+
     adapter.flush();
 
-    assertThat(waitUntilAllEventsAreExecuted(looper, /* time= */ 5, TimeUnit.SECONDS)).isTrue();
+    // Wait until all tasks have been handled.
+    Shadows.shadowOf(handlerThread.getLooper()).idle();
     assertThat(adapter.getOutputFormat()).isEqualTo(format);
   }
 
   @Test
-  public void shutdown_withPendingFlush_cancelsFlush() throws InterruptedException {
-    AtomicInteger onCodecStartCalled = new AtomicInteger(0);
-    adapter.setCodecStartRunnable(() -> onCodecStartCalled.incrementAndGet());
+  public void flush_multipleTimes_onlyLastFlushExecutes() {
+    AtomicInteger codecStartCalls = new AtomicInteger(0);
+    adapter.setCodecStartRunnable(() -> codecStartCalls.incrementAndGet());
     adapter.start();
+    Looper looper = handlerThread.getLooper();
+    Handler handler = new Handler(looper);
+    handler.post(() -> adapter.onInputBufferAvailable(codec, 0));
+    adapter.flush(); // Enqueues a flush event
+    handler.post(() -> adapter.onInputBufferAvailable(codec, 2));
+    AtomicInteger milestoneCount = new AtomicInteger(0);
+    handler.post(() -> milestoneCount.incrementAndGet());
+    adapter.flush(); // Enqueues a second flush event
+    handler.post(() -> adapter.onInputBufferAvailable(codec, 3));
+
+    // Progress the looper until the milestoneCount is increased.
+    // adapter.start() will call codec.start(). First flush event should not call codec.start().
+    ShadowLooper shadowLooper = shadowOf(looper);
+    while (milestoneCount.get() < 1) {
+      shadowLooper.runOneTask();
+    }
+    assertThat(codecStartCalls.get()).isEqualTo(1);
+
+    // Wait until all tasks have been handled.
+    shadowLooper.idle();
+    assertThat(adapter.dequeueInputBufferIndex()).isEqualTo(3);
+    assertThat(codecStartCalls.get()).isEqualTo(2);
+  }
+
+  @Test
+  public void flush_andImmediatelyShutdown_flushIsNoOp() {
+    AtomicInteger onCodecStartCount = new AtomicInteger(0);
+    adapter.setCodecStartRunnable(() -> onCodecStartCount.incrementAndGet());
+    adapter.start();
+    // Grab reference to Looper before shutting down the adapter otherwise handlerThread.getLooper()
+    // might return null.
+    Looper looper = handlerThread.getLooper();
     adapter.flush();
     adapter.shutdown();
 
-    assertThat(waitUntilAllEventsAreExecuted(looper, /* time= */ 5, TimeUnit.SECONDS)).isTrue();
-    assertThat(onCodecStartCalled.get()).isEqualTo(1);
+    // Wait until all tasks have been handled.
+    Shadows.shadowOf(looper).idle();
+    // Only adapter.start() calls onCodecStart.
+    assertThat(onCodecStartCount.get()).isEqualTo(1);
+  }
+
+  private static class TestHandlerThread extends HandlerThread {
+    private static final AtomicLong INSTANCES_STARTED = new AtomicLong(0);
+
+    public TestHandlerThread(String name) {
+      super(name);
+    }
+
+    @Override
+    public synchronized void start() {
+      super.start();
+      INSTANCES_STARTED.incrementAndGet();
+    }
+
+    @Override
+    public boolean quit() {
+      boolean quit = super.quit();
+      if (quit) {
+        INSTANCES_STARTED.decrementAndGet();
+      }
+      return quit;
+    }
   }
 }

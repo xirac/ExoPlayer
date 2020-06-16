@@ -25,6 +25,10 @@
 -keepclassmembers class com.google.android.exoplayer2.ext.av1.Libgav1VideoRenderer {
   <init>(long, android.os.Handler, com.google.android.exoplayer2.video.VideoRendererEventListener, int);
 }
+-dontnote com.google.android.exoplayer2.ext.ffmpeg.FfmpegVideoRenderer
+-keepclassmembers class com.google.android.exoplayer2.ext.ffmpeg.FfmpegVideoRenderer {
+  <init>(long, android.os.Handler, com.google.android.exoplayer2.video.VideoRendererEventListener, int);
+}
 -dontnote com.google.android.exoplayer2.ext.opus.LibopusAudioRenderer
 -keepclassmembers class com.google.android.exoplayer2.ext.opus.LibopusAudioRenderer {
   <init>(android.os.Handler, com.google.android.exoplayer2.audio.AudioRendererEventListener, com.google.android.exoplayer2.audio.AudioProcessor[]);
@@ -38,12 +42,6 @@
   <init>(android.os.Handler, com.google.android.exoplayer2.audio.AudioRendererEventListener, com.google.android.exoplayer2.audio.AudioProcessor[]);
 }
 
-# Constructors accessed via reflection in DefaultExtractorsFactory
--dontnote com.google.android.exoplayer2.ext.flac.FlacExtractor
--keepclassmembers class com.google.android.exoplayer2.ext.flac.FlacExtractor {
-  <init>();
-}
-
 # Constructors accessed via reflection in DefaultDataSource
 -dontnote com.google.android.exoplayer2.ext.rtmp.RtmpDataSource
 -keepclassmembers class com.google.android.exoplayer2.ext.rtmp.RtmpDataSource {
@@ -53,18 +51,18 @@
 # Constructors accessed via reflection in DefaultDownloaderFactory
 -dontnote com.google.android.exoplayer2.source.dash.offline.DashDownloader
 -keepclassmembers class com.google.android.exoplayer2.source.dash.offline.DashDownloader {
-  <init>(android.net.Uri, java.util.List, com.google.android.exoplayer2.offline.DownloaderConstructorHelper);
+  <init>(android.net.Uri, java.util.List, com.google.android.exoplayer2.upstream.cache.CacheDataSource.Factory, java.util.concurrent.Executor);
 }
 -dontnote com.google.android.exoplayer2.source.hls.offline.HlsDownloader
 -keepclassmembers class com.google.android.exoplayer2.source.hls.offline.HlsDownloader {
-  <init>(android.net.Uri, java.util.List, com.google.android.exoplayer2.offline.DownloaderConstructorHelper);
+  <init>(android.net.Uri, java.util.List, com.google.android.exoplayer2.upstream.cache.CacheDataSource.Factory, java.util.concurrent.Executor);
 }
 -dontnote com.google.android.exoplayer2.source.smoothstreaming.offline.SsDownloader
 -keepclassmembers class com.google.android.exoplayer2.source.smoothstreaming.offline.SsDownloader {
-  <init>(android.net.Uri, java.util.List, com.google.android.exoplayer2.offline.DownloaderConstructorHelper);
+  <init>(android.net.Uri, java.util.List, com.google.android.exoplayer2.upstream.cache.CacheDataSource.Factory, java.util.concurrent.Executor);
 }
 
-# Constructors accessed via reflection in DownloadHelper
+# Constructors accessed via reflection in DefaultMediaSourceFactory
 -dontnote com.google.android.exoplayer2.source.dash.DashMediaSource$Factory
 -keepclasseswithmembers class com.google.android.exoplayer2.source.dash.DashMediaSource$Factory {
   <init>(com.google.android.exoplayer2.upstream.DataSource$Factory);

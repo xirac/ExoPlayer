@@ -27,6 +27,7 @@ import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.FormatHolder;
 import com.google.android.exoplayer2.RendererCapabilities;
+import com.google.android.exoplayer2.source.SampleStream;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.Util;
 import java.util.ArrayList;
@@ -39,6 +40,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
  */
 public final class MetadataRenderer extends BaseRenderer implements Callback {
 
+  private static final String TAG = "MetadataRenderer";
   private static final int MSG_INVOKE_RENDERER = 0;
   // TODO: Holding multiple pending metadata objects is temporary mitigation against
   // https://github.com/google/ExoPlayer/issues/1874. It should be removed once this issue has been
@@ -92,11 +94,16 @@ public final class MetadataRenderer extends BaseRenderer implements Callback {
   }
 
   @Override
+  public String getName() {
+    return TAG;
+  }
+
+  @Override
   @Capabilities
   public int supportsFormat(Format format) {
     if (decoderFactory.supportsFormat(format)) {
       return RendererCapabilities.create(
-          supportsFormatDrm(null, format.drmInitData) ? FORMAT_HANDLED : FORMAT_UNSUPPORTED_DRM);
+          format.drmInitData == null ? FORMAT_HANDLED : FORMAT_UNSUPPORTED_DRM);
     } else {
       return RendererCapabilities.create(FORMAT_UNSUPPORTED_TYPE);
     }
@@ -118,7 +125,7 @@ public final class MetadataRenderer extends BaseRenderer implements Callback {
     if (!inputStreamEnded && pendingMetadataCount < MAX_PENDING_METADATA_COUNT) {
       buffer.clear();
       FormatHolder formatHolder = getFormatHolder();
-      int result = readSource(formatHolder, buffer, false);
+      @SampleStream.ReadDataResult int result = readSource(formatHolder, buffer, false);
       if (result == C.RESULT_BUFFER_READ) {
         if (buffer.isEndOfStream()) {
           inputStreamEnded = true;

@@ -18,9 +18,9 @@ package com.google.android.exoplayer2.source.dash.offline;
 import android.net.Uri;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
+import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.extractor.ChunkIndex;
 import com.google.android.exoplayer2.offline.DownloadException;
-import com.google.android.exoplayer2.offline.DownloaderConstructorHelper;
 import com.google.android.exoplayer2.offline.SegmentDownloader;
 import com.google.android.exoplayer2.offline.StreamKey;
 import com.google.android.exoplayer2.source.dash.DashSegmentIndex;
@@ -34,10 +34,12 @@ import com.google.android.exoplayer2.source.dash.manifest.RangedUri;
 import com.google.android.exoplayer2.source.dash.manifest.Representation;
 import com.google.android.exoplayer2.upstream.DataSource;
 import com.google.android.exoplayer2.upstream.DataSpec;
-import com.google.android.exoplayer2.upstream.ParsingLoadable;
+import com.google.android.exoplayer2.upstream.ParsingLoadable.Parser;
+import com.google.android.exoplayer2.upstream.cache.CacheDataSource;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executor;
 
 /**
  * A downloader for DASH streams.
@@ -46,44 +48,100 @@ import java.util.List;
  *
  * <pre>{@code
  * SimpleCache cache = new SimpleCache(downloadFolder, new NoOpCacheEvictor(), databaseProvider);
- * DefaultHttpDataSourceFactory factory = new DefaultHttpDataSourceFactory("ExoPlayer", null);
- * DownloaderConstructorHelper constructorHelper =
- *     new DownloaderConstructorHelper(cache, factory);
+ * CacheDataSource.Factory cacheDataSourceFactory =
+ *     new CacheDataSource.Factory()
+ *         .setCache(cache)
+ *         .setUpstreamDataSourceFactory(new DefaultHttpDataSourceFactory(userAgent));
  * // Create a downloader for the first representation of the first adaptation set of the first
  * // period.
  * DashDownloader dashDownloader =
  *     new DashDownloader(
- *         manifestUrl, Collections.singletonList(new StreamKey(0, 0, 0)), constructorHelper);
+ *         new MediaItem.Builder()
+ *             .setUri(manifestUrl)
+ *             .setStreamKeys(Collections.singletonList(new StreamKey(0, 0, 0)))
+ *             .build(),
+ *         cacheDataSourceFactory);
  * // Perform the download.
  * dashDownloader.download(progressListener);
- * // Access downloaded data using CacheDataSource
- * CacheDataSource cacheDataSource =
- *     new CacheDataSource(cache, factory.createDataSource(), CacheDataSource.FLAG_BLOCK_ON_CACHE);
+ * // Use the downloaded data for playback.
+ * DashMediaSource mediaSource =
+ *     new DashMediaSource.Factory(cacheDataSourceFactory).createMediaSource(mediaItem);
  * }</pre>
  */
 public final class DashDownloader extends SegmentDownloader<DashManifest> {
 
-  /**
-   * @param manifestUri The {@link Uri} of the manifest to be downloaded.
-   * @param streamKeys Keys defining which representations in the manifest should be selected for
-   *     download. If empty, all representations are downloaded.
-   * @param constructorHelper A {@link DownloaderConstructorHelper} instance.
-   */
+  /** @deprecated Use {@link #DashDownloader(MediaItem, CacheDataSource.Factory)} instead. */
+  @SuppressWarnings("deprecation")
+  @Deprecated
   public DashDownloader(
-      Uri manifestUri, List<StreamKey> streamKeys, DownloaderConstructorHelper constructorHelper) {
-    super(manifestUri, streamKeys, constructorHelper);
+      Uri manifestUri, List<StreamKey> streamKeys, CacheDataSource.Factory cacheDataSourceFactory) {
+    this(manifestUri, streamKeys, cacheDataSourceFactory, Runnable::run);
   }
 
-  @Override
-  protected DashManifest getManifest(DataSource dataSource, DataSpec dataSpec) throws IOException {
-    return ParsingLoadable.load(
-        dataSource, new DashManifestParser(), dataSpec, C.DATA_TYPE_MANIFEST);
+  /**
+   * Creates a new instance.
+   *
+   * @param mediaItem The {@link MediaItem} to be downloaded.
+   * @param cacheDataSourceFactory A {@link CacheDataSource.Factory} for the cache into which the
+   *     download will be written.
+   */
+  public DashDownloader(MediaItem mediaItem, CacheDataSource.Factory cacheDataSourceFactory) {
+    this(mediaItem, cacheDataSourceFactory, Runnable::run);
+  }
+
+  /**
+   * @deprecated Use {@link #DashDownloader(MediaItem, CacheDataSource.Factory, Executor)} instead.
+   */
+  @Deprecated
+  public DashDownloader(
+      Uri manifestUri,
+      List<StreamKey> streamKeys,
+      CacheDataSource.Factory cacheDataSourceFactory,
+      Executor executor) {
+    this(
+        new MediaItem.Builder().setUri(manifestUri).setStreamKeys(streamKeys).build(),
+        cacheDataSourceFactory,
+        executor);
+  }
+
+  /**
+   * Creates a new instance.
+   *
+   * @param mediaItem The {@link MediaItem} to be downloaded.
+   * @param cacheDataSourceFactory A {@link CacheDataSource.Factory} for the cache into which the
+   *     download will be written.
+   * @param executor An {@link Executor} used to make requests for the media being downloaded.
+   *     Providing an {@link Executor} that uses multiple threads will speed up the download by
+   *     allowing parts of it to be executed in parallel.
+   */
+  public DashDownloader(
+      MediaItem mediaItem, CacheDataSource.Factory cacheDataSourceFactory, Executor executor) {
+    this(mediaItem, new DashManifestParser(), cacheDataSourceFactory, executor);
+  }
+
+  /**
+   * Creates a new instance.
+   *
+   * @param mediaItem The {@link MediaItem} to be downloaded.
+   * @param manifestParser A parser for DASH manifests.
+   * @param cacheDataSourceFactory A {@link CacheDataSource.Factory} for the cache into which the
+   *     download will be written.
+   * @param executor An {@link Executor} used to make requests for the media being downloaded.
+   *     Providing an {@link Executor} that uses multiple threads will speed up the download by
+   *     allowing parts of it to be executed in parallel.
+   */
+  public DashDownloader(
+      MediaItem mediaItem,
+      Parser<DashManifest> manifestParser,
+      CacheDataSource.Factory cacheDataSourceFactory,
+      Executor executor) {
+    super(mediaItem, manifestParser, cacheDataSourceFactory, executor);
   }
 
   @Override
   protected List<Segment> getSegments(
       DataSource dataSource, DashManifest manifest, boolean allowIncompleteList)
-      throws InterruptedException, IOException {
+      throws IOException {
     ArrayList<Segment> segments = new ArrayList<>();
     for (int i = 0; i < manifest.getPeriodCount(); i++) {
       Period period = manifest.getPeriod(i);
@@ -110,7 +168,7 @@ public final class DashDownloader extends SegmentDownloader<DashManifest> {
       long periodDurationUs,
       boolean allowIncompleteList,
       ArrayList<Segment> out)
-      throws IOException, InterruptedException {
+      throws IOException {
     for (int i = 0; i < adaptationSet.representations.size(); i++) {
       Representation representation = adaptationSet.representations.get(i);
       DashSegmentIndex index;
@@ -153,13 +211,12 @@ public final class DashDownloader extends SegmentDownloader<DashManifest> {
   private static void addSegment(
       long startTimeUs, String baseUrl, RangedUri rangedUri, ArrayList<Segment> out) {
     DataSpec dataSpec =
-        new DataSpec(rangedUri.resolveUri(baseUrl), rangedUri.start, rangedUri.length, null);
+        new DataSpec(rangedUri.resolveUri(baseUrl), rangedUri.start, rangedUri.length);
     out.add(new Segment(startTimeUs, dataSpec));
   }
 
   private static @Nullable DashSegmentIndex getSegmentIndex(
-      DataSource dataSource, int trackType, Representation representation)
-      throws IOException, InterruptedException {
+      DataSource dataSource, int trackType, Representation representation) throws IOException {
     DashSegmentIndex index = representation.getIndex();
     if (index != null) {
       return index;

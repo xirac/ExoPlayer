@@ -31,10 +31,13 @@ import com.google.android.exoplayer2.util.Clock;
 import com.google.android.exoplayer2.util.ConditionVariable;
 import com.google.android.exoplayer2.util.Log;
 import com.google.android.exoplayer2.util.Predicate;
+import com.google.android.exoplayer2.util.Util;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -81,14 +84,6 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
       this.cronetConnectionStatus = cronetConnectionStatus;
     }
 
-  }
-
-  /** Thrown on catching an InterruptedException. */
-  public static final class InterruptedIOException extends IOException {
-
-    public InterruptedIOException(InterruptedException e) {
-      super(e);
-    }
   }
 
   static {
@@ -440,19 +435,35 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
       }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw new OpenException(new InterruptedIOException(e), dataSpec, Status.INVALID);
+      throw new OpenException(new InterruptedIOException(), dataSpec, Status.INVALID);
     }
 
     // Check for a valid response code.
     UrlResponseInfo responseInfo = Assertions.checkNotNull(this.responseInfo);
     int responseCode = responseInfo.getHttpStatusCode();
     if (responseCode < 200 || responseCode > 299) {
+      byte[] responseBody = Util.EMPTY_BYTE_ARRAY;
+      ByteBuffer readBuffer = getOrCreateReadBuffer();
+      while (!readBuffer.hasRemaining()) {
+        operation.close();
+        readBuffer.clear();
+        readInternal(readBuffer);
+        if (finished) {
+          break;
+        }
+        readBuffer.flip();
+        int existingResponseBodyEnd = responseBody.length;
+        responseBody = Arrays.copyOf(responseBody, responseBody.length + readBuffer.remaining());
+        readBuffer.get(responseBody, existingResponseBodyEnd, readBuffer.remaining());
+      }
+
       InvalidResponseCodeException exception =
           new InvalidResponseCodeException(
               responseCode,
               responseInfo.getHttpStatusText(),
               responseInfo.getAllHeaders(),
-              dataSpec);
+              dataSpec,
+              responseBody);
       if (responseCode == 416) {
         exception.initCause(new DataSourceException(DataSourceException.POSITION_OUT_OF_RANGE));
       }
@@ -503,17 +514,12 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
       return C.RESULT_END_OF_INPUT;
     }
 
-    ByteBuffer readBuffer = this.readBuffer;
-    if (readBuffer == null) {
-      readBuffer = ByteBuffer.allocateDirect(READ_BUFFER_SIZE_BYTES);
-      readBuffer.limit(0);
-      this.readBuffer = readBuffer;
-    }
+    ByteBuffer readBuffer = getOrCreateReadBuffer();
     while (!readBuffer.hasRemaining()) {
       // Fill readBuffer with more data from Cronet.
       operation.close();
       readBuffer.clear();
-      readInternal(castNonNull(readBuffer));
+      readInternal(readBuffer);
 
       if (finished) {
         bytesRemaining = 0;
@@ -610,11 +616,8 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
       operation.close();
 
       if (!useCallerBuffer) {
-        if (readBuffer == null) {
-          readBuffer = ByteBuffer.allocateDirect(READ_BUFFER_SIZE_BYTES);
-        } else {
-          readBuffer.clear();
-        }
+        ByteBuffer readBuffer = getOrCreateReadBuffer();
+        readBuffer.clear();
         if (bytesToSkip < READ_BUFFER_SIZE_BYTES) {
           readBuffer.limit((int) bytesToSkip);
         }
@@ -705,7 +708,7 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
     if (dataSpec.httpBody != null && !requestHeaders.containsKey(CONTENT_TYPE)) {
       throw new IOException("HTTP request with non-empty body must set Content-Type");
     }
-    
+
     // Set the Range header.
     if (dataSpec.position != 0 || dataSpec.length != C.LENGTH_UNSET) {
       StringBuilder rangeValue = new StringBuilder();
@@ -769,7 +772,7 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
       }
       Thread.currentThread().interrupt();
       throw new HttpDataSourceException(
-          new InterruptedIOException(e),
+          new InterruptedIOException(),
           castNonNull(currentDataSpec),
           HttpDataSourceException.TYPE_READ);
     } catch (SocketTimeoutException e) {
@@ -786,6 +789,14 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
       throw new HttpDataSourceException(
           exception, castNonNull(currentDataSpec), HttpDataSourceException.TYPE_READ);
     }
+  }
+
+  private ByteBuffer getOrCreateReadBuffer() {
+    if (readBuffer == null) {
+      readBuffer = ByteBuffer.allocateDirect(READ_BUFFER_SIZE_BYTES);
+      readBuffer.limit(0);
+    }
+    return readBuffer;
   }
 
   private static boolean isCompressed(UrlResponseInfo info) {
@@ -819,7 +830,9 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
       if (matcher.find()) {
         try {
           long contentLengthFromRange =
-              Long.parseLong(matcher.group(2)) - Long.parseLong(matcher.group(1)) + 1;
+              Long.parseLong(Assertions.checkNotNull(matcher.group(2)))
+                  - Long.parseLong(Assertions.checkNotNull(matcher.group(1)))
+                  + 1;
           if (contentLength < 0) {
             // Some proxy servers strip the Content-Length header. Fall back to the length
             // calculated here in this case.
@@ -898,7 +911,11 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
         if (responseCode == 307 || responseCode == 308) {
           exception =
               new InvalidResponseCodeException(
-                  responseCode, info.getHttpStatusText(), info.getAllHeaders(), dataSpec);
+                  responseCode,
+                  info.getHttpStatusText(),
+                  info.getAllHeaders(),
+                  dataSpec,
+                  /* responseBody= */ Util.EMPTY_BYTE_ARRAY);
           operation.open();
           return;
         }
@@ -924,16 +941,12 @@ public class CronetDataSource extends BaseDataSource implements HttpDataSource {
         // For POST redirects that aren't 307 or 308, the redirect is followed but request is
         // transformed into a GET.
         redirectUrlDataSpec =
-            new DataSpec(
-                Uri.parse(newLocationUrl),
-                DataSpec.HTTP_METHOD_GET,
-                /* httpBody= */ null,
-                dataSpec.absoluteStreamPosition,
-                dataSpec.position,
-                dataSpec.length,
-                dataSpec.key,
-                dataSpec.flags,
-                dataSpec.httpRequestHeaders);
+            dataSpec
+                .buildUpon()
+                .setUri(newLocationUrl)
+                .setHttpMethod(DataSpec.HTTP_METHOD_GET)
+                .setHttpBody(null)
+                .build();
       } else {
         redirectUrlDataSpec = dataSpec.withUri(Uri.parse(newLocationUrl));
       }

@@ -33,7 +33,7 @@ public class DefaultLoadErrorHandlingPolicy implements LoadErrorHandlingPolicy {
    */
   public static final int DEFAULT_MIN_LOADABLE_RETRY_COUNT_PROGRESSIVE_LIVE = 6;
   /** The default duration for which a track is blacklisted in milliseconds. */
-  public static final long DEFAULT_TRACK_BLACKLIST_MS = 60000;
+  public static final long DEFAULT_TRACK_BLACKLIST_MS = 60_000;
 
   private static final int DEFAULT_BEHAVIOR_MIN_LOADABLE_RETRY_COUNT = -1;
 
@@ -65,8 +65,8 @@ public class DefaultLoadErrorHandlingPolicy implements LoadErrorHandlingPolicy {
    * code HTTP 404 or 410. The duration of the blacklisting is {@link #DEFAULT_TRACK_BLACKLIST_MS}.
    */
   @Override
-  public long getBlacklistDurationMsFor(
-      int dataType, long loadDurationMs, IOException exception, int errorCount) {
+  public long getBlacklistDurationMsFor(LoadErrorInfo loadErrorInfo) {
+    IOException exception = loadErrorInfo.exception;
     if (exception instanceof InvalidResponseCodeException) {
       int responseCode = ((InvalidResponseCodeException) exception).responseCode;
       return responseCode == 404 // HTTP 404 Not Found.
@@ -84,13 +84,13 @@ public class DefaultLoadErrorHandlingPolicy implements LoadErrorHandlingPolicy {
    * {@code Math.min((errorCount - 1) * 1000, 5000)}.
    */
   @Override
-  public long getRetryDelayMsFor(
-      int dataType, long loadDurationMs, IOException exception, int errorCount) {
+  public long getRetryDelayMsFor(LoadErrorInfo loadErrorInfo) {
+    IOException exception = loadErrorInfo.exception;
     return exception instanceof ParserException
             || exception instanceof FileNotFoundException
             || exception instanceof UnexpectedLoaderException
         ? C.TIME_UNSET
-        : Math.min((errorCount - 1) * 1000, 5000);
+        : Math.min((loadErrorInfo.errorCount - 1) * 1000, 5000);
   }
 
   /**

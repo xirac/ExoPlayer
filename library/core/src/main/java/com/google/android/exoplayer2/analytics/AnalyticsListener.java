@@ -56,7 +56,7 @@ public interface AnalyticsListener {
      */
     public final long realtimeMs;
 
-    /** Timeline at the time of the event. */
+    /** Most recent {@link Timeline} that contains the event position. */
     public final Timeline timeline;
 
     /**
@@ -66,8 +66,8 @@ public interface AnalyticsListener {
     public final int windowIndex;
 
     /**
-     * Media period identifier for the media period this event belongs to, or {@code null} if the
-     * event is not associated with a specific media period.
+     * {@link MediaPeriodId Media period identifier} for the media period this event belongs to, or
+     * {@code null} if the event is not associated with a specific media period.
      */
     @Nullable public final MediaPeriodId mediaPeriodId;
 
@@ -77,8 +77,27 @@ public interface AnalyticsListener {
     public final long eventPlaybackPositionMs;
 
     /**
-     * Position in the current timeline window ({@link Player#getCurrentWindowIndex()}) or the
-     * currently playing ad at the time of the event, in milliseconds.
+     * The current {@link Timeline} at the time of the event (equivalent to {@link
+     * Player#getCurrentTimeline()}).
+     */
+    public final Timeline currentTimeline;
+
+    /**
+     * The current window index in {@link #currentTimeline} at the time of the event, or the
+     * prospective window index if the timeline is not yet known and empty (equivalent to {@link
+     * Player#getCurrentWindowIndex()}).
+     */
+    public final int currentWindowIndex;
+
+    /**
+     * {@link MediaPeriodId Media period identifier} for the currently playing media period at the
+     * time of the event, or {@code null} if no current media period identifier is available.
+     */
+    @Nullable public final MediaPeriodId currentMediaPeriodId;
+
+    /**
+     * Position in the {@link #currentWindowIndex current timeline window} or the currently playing
+     * ad at the time of the event, in milliseconds.
      */
     public final long currentPlaybackPositionMs;
 
@@ -91,19 +110,27 @@ public interface AnalyticsListener {
     /**
      * @param realtimeMs Elapsed real-time as returned by {@code SystemClock.elapsedRealtime()} at
      *     the time of the event, in milliseconds.
-     * @param timeline Timeline at the time of the event.
-     * @param windowIndex Window index in the {@link #timeline} this event belongs to, or the
+     * @param timeline Most recent {@link Timeline} that contains the event position.
+     * @param windowIndex Window index in the {@code timeline} this event belongs to, or the
      *     prospective window index if the timeline is not yet known and empty.
-     * @param mediaPeriodId Media period identifier for the media period this event belongs to, or
-     *     {@code null} if the event is not associated with a specific media period.
+     * @param mediaPeriodId {@link MediaPeriodId Media period identifier} for the media period this
+     *     event belongs to, or {@code null} if the event is not associated with a specific media
+     *     period.
      * @param eventPlaybackPositionMs Position in the window or ad this event belongs to at the time
      *     of the event, in milliseconds.
-     * @param currentPlaybackPositionMs Position in the current timeline window ({@link
-     *     Player#getCurrentWindowIndex()}) or the currently playing ad at the time of the event, in
-     *     milliseconds.
-     * @param totalBufferedDurationMs Total buffered duration from {@link
-     *     #currentPlaybackPositionMs} at the time of the event, in milliseconds. This includes
-     *     pre-buffered data for subsequent ads and windows.
+     * @param currentTimeline The current {@link Timeline} at the time of the event (equivalent to
+     *     {@link Player#getCurrentTimeline()}).
+     * @param currentWindowIndex The current window index in {@code currentTimeline} at the time of
+     *     the event, or the prospective window index if the timeline is not yet known and empty
+     *     (equivalent to {@link Player#getCurrentWindowIndex()}).
+     * @param currentMediaPeriodId {@link MediaPeriodId Media period identifier} for the currently
+     *     playing media period at the time of the event, or {@code null} if no current media period
+     *     identifier is available.
+     * @param currentPlaybackPositionMs Position in the current timeline window or the currently
+     *     playing ad at the time of the event, in milliseconds.
+     * @param totalBufferedDurationMs Total buffered duration from {@code currentPlaybackPositionMs}
+     *     at the time of the event, in milliseconds. This includes pre-buffered data for subsequent
+     *     ads and windows.
      */
     public EventTime(
         long realtimeMs,
@@ -111,6 +138,9 @@ public interface AnalyticsListener {
         int windowIndex,
         @Nullable MediaPeriodId mediaPeriodId,
         long eventPlaybackPositionMs,
+        Timeline currentTimeline,
+        int currentWindowIndex,
+        @Nullable MediaPeriodId currentMediaPeriodId,
         long currentPlaybackPositionMs,
         long totalBufferedDurationMs) {
       this.realtimeMs = realtimeMs;
@@ -118,20 +148,39 @@ public interface AnalyticsListener {
       this.windowIndex = windowIndex;
       this.mediaPeriodId = mediaPeriodId;
       this.eventPlaybackPositionMs = eventPlaybackPositionMs;
+      this.currentTimeline = currentTimeline;
+      this.currentWindowIndex = currentWindowIndex;
+      this.currentMediaPeriodId = currentMediaPeriodId;
       this.currentPlaybackPositionMs = currentPlaybackPositionMs;
       this.totalBufferedDurationMs = totalBufferedDurationMs;
     }
   }
 
   /**
-   * Called when the player state changed.
-   *
-   * @param eventTime The event time.
-   * @param playWhenReady Whether the playback will proceed when ready.
-   * @param playbackState The new {@link Player.State playback state}.
+   * @deprecated Use {@link #onPlaybackStateChanged(EventTime, int)} and {@link
+   *     #onPlayWhenReadyChanged(EventTime, boolean, int)} instead.
    */
+  @Deprecated
   default void onPlayerStateChanged(
       EventTime eventTime, boolean playWhenReady, @Player.State int playbackState) {}
+
+  /**
+   * Called when the playback state changed.
+   *
+   * @param eventTime The event time.
+   * @param state The new {@link Player.State playback state}.
+   */
+  default void onPlaybackStateChanged(EventTime eventTime, @Player.State int state) {}
+
+  /**
+   * Called when the value changed that indicates whether playback will proceed when ready.
+   *
+   * @param eventTime The event time.
+   * @param playWhenReady Whether playback will proceed when ready.
+   * @param reason The {@link Player.PlayWhenReadyChangeReason reason} of the change.
+   */
+  default void onPlayWhenReadyChanged(
+      EventTime eventTime, boolean playWhenReady, @Player.PlayWhenReadyChangeReason int reason) {}
 
   /**
    * Called when playback suppression reason changed.
@@ -174,20 +223,29 @@ public interface AnalyticsListener {
   default void onSeekStarted(EventTime eventTime) {}
 
   /**
-   * Called when a seek operation was processed.
-   *
-   * @param eventTime The event time.
+   * @deprecated Seeks are processed without delay. Listen to {@link
+   *     #onPositionDiscontinuity(EventTime, int)} with reason {@link
+   *     Player#DISCONTINUITY_REASON_SEEK} instead.
    */
+  @Deprecated
   default void onSeekProcessed(EventTime eventTime) {}
 
   /**
-   * Called when the playback parameters changed.
-   *
-   * @param eventTime The event time.
-   * @param playbackParameters The new playback parameters.
+   * @deprecated Use {@link #onPlaybackSpeedChanged(EventTime, float)} and {@link
+   *     #onSkipSilenceEnabledChanged(EventTime, boolean)} instead.
    */
+  @SuppressWarnings("deprecation")
+  @Deprecated
   default void onPlaybackParametersChanged(
       EventTime eventTime, PlaybackParameters playbackParameters) {}
+
+  /**
+   * Called when the playback speed changes.
+   *
+   * @param eventTime The event time.
+   * @param playbackSpeed The playback speed.
+   */
+  default void onPlaybackSpeedChanged(EventTime eventTime, float playbackSpeed) {}
 
   /**
    * Called when the repeat mode changed.
@@ -211,6 +269,13 @@ public interface AnalyticsListener {
    * @param eventTime The event time.
    * @param isLoading Whether the player is loading.
    */
+  @SuppressWarnings("deprecation")
+  default void onIsLoadingChanged(EventTime eventTime, boolean isLoading) {
+    onLoadingChanged(eventTime, isLoading);
+  }
+
+  /** @deprecated Use {@link #onIsLoadingChanged(EventTime, boolean)} instead. */
+  @Deprecated
   default void onLoadingChanged(EventTime eventTime, boolean isLoading) {}
 
   /**
@@ -428,6 +493,14 @@ public interface AnalyticsListener {
       EventTime eventTime, int bufferSize, long bufferSizeMs, long elapsedSinceLastFeedMs) {}
 
   /**
+   * Called when skipping silences is enabled or disabled in the audio stream.
+   *
+   * @param eventTime The event time.
+   * @param skipSilenceEnabled Whether skipping silences in the audio stream is enabled.
+   */
+  default void onSkipSilenceEnabledChanged(EventTime eventTime, boolean skipSilenceEnabled) {}
+
+  /**
    * Called after video frames have been dropped.
    *
    * @param eventTime The event time.
@@ -437,6 +510,30 @@ public interface AnalyticsListener {
    *     (whichever was more recent), and not from when the first of the reported drops occurred.
    */
   default void onDroppedVideoFrames(EventTime eventTime, int droppedFrames, long elapsedMs) {}
+
+  /**
+   * Called when there is an update to the video frame processing offset reported by a video
+   * renderer.
+   *
+   * <p>Video processing offset represents how early a video frame is processed compared to the
+   * player's current position. For each video frame, the offset is calculated as <em>P<sub>vf</sub>
+   * - P<sub>pl</sub></em> where <em>P<sub>vf</sub></em> is the presentation timestamp of the video
+   * frame and <em>P<sub>pl</sub></em> is the current position of the player. Positive values
+   * indicate the frame was processed early enough whereas negative values indicate that the
+   * player's position had progressed beyond the frame's timestamp when the frame was processed (and
+   * the frame was probably dropped).
+   *
+   * <p>The renderer reports the sum of video processing offset samples (one sample per processed
+   * video frame: dropped, skipped or rendered) and the total number of samples (frames).
+   *
+   * @param eventTime The event time.
+   * @param totalProcessingOffsetUs The sum of video frame processing offset samples for all video
+   *     frames processed by the renderer in microseconds.
+   * @param frameCount The number to samples included in the {@code totalProcessingOffsetUs}.
+   * @param format The current output {@link Format} rendered by the video renderer.
+   */
+  default void onVideoFrameProcessingOffset(
+      EventTime eventTime, long totalProcessingOffsetUs, int frameCount, Format format) {}
 
   /**
    * Called before a frame is rendered for the first time since setting the surface, and each time

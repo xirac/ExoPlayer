@@ -39,6 +39,7 @@ import com.google.android.exoplayer2.source.TrackGroupArray;
 import com.google.android.exoplayer2.upstream.BandwidthMeter;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.Util;
+import com.google.common.primitives.Ints;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -168,6 +169,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
     private int maxVideoHeight;
     private int maxVideoFrameRate;
     private int maxVideoBitrate;
+    private int minVideoWidth;
+    private int minVideoHeight;
+    private int minVideoFrameRate;
+    private int minVideoBitrate;
     private boolean exceedVideoConstraintsIfNecessary;
     private boolean allowVideoMixedMimeTypeAdaptiveness;
     private boolean allowVideoNonSeamlessAdaptiveness;
@@ -229,6 +234,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       maxVideoHeight = initialValues.maxVideoHeight;
       maxVideoFrameRate = initialValues.maxVideoFrameRate;
       maxVideoBitrate = initialValues.maxVideoBitrate;
+      minVideoWidth = initialValues.minVideoWidth;
+      minVideoHeight = initialValues.minVideoHeight;
+      minVideoFrameRate = initialValues.minVideoFrameRate;
+      minVideoBitrate = initialValues.minVideoBitrate;
       exceedVideoConstraintsIfNecessary = initialValues.exceedVideoConstraintsIfNecessary;
       allowVideoMixedMimeTypeAdaptiveness = initialValues.allowVideoMixedMimeTypeAdaptiveness;
       allowVideoNonSeamlessAdaptiveness = initialValues.allowVideoNonSeamlessAdaptiveness;
@@ -309,8 +318,43 @@ public class DefaultTrackSelector extends MappingTrackSelector {
     }
 
     /**
-     * Sets whether to exceed the {@link #setMaxVideoSize(int, int)} and {@link
-     * #setMaxAudioBitrate(int)} constraints when no selection can be made otherwise.
+     * Sets the minimum allowed video width and height.
+     *
+     * @param minVideoWidth Minimum allowed video width in pixels.
+     * @param minVideoHeight Minimum allowed video height in pixels.
+     * @return This builder.
+     */
+    public ParametersBuilder setMinVideoSize(int minVideoWidth, int minVideoHeight) {
+      this.minVideoWidth = minVideoWidth;
+      this.minVideoHeight = minVideoHeight;
+      return this;
+    }
+
+    /**
+     * Sets the minimum allowed video frame rate.
+     *
+     * @param minVideoFrameRate Minimum allowed video frame rate in hertz.
+     * @return This builder.
+     */
+    public ParametersBuilder setMinVideoFrameRate(int minVideoFrameRate) {
+      this.minVideoFrameRate = minVideoFrameRate;
+      return this;
+    }
+
+    /**
+     * Sets the minimum allowed video bitrate.
+     *
+     * @param minVideoBitrate Minimum allowed video bitrate in bits per second.
+     * @return This builder.
+     */
+    public ParametersBuilder setMinVideoBitrate(int minVideoBitrate) {
+      this.minVideoBitrate = minVideoBitrate;
+      return this;
+    }
+
+    /**
+     * Sets whether to exceed the {@link #setMaxVideoBitrate}, {@link #setMaxVideoSize(int, int)}
+     * and {@link #setMaxVideoFrameRate} constraints when no selection can be made otherwise.
      *
      * @param exceedVideoConstraintsIfNecessary Whether to exceed video constraints when no
      *     selection can be made otherwise.
@@ -550,23 +594,6 @@ public class DefaultTrackSelector extends MappingTrackSelector {
     }
 
     /**
-     * @deprecated Use {@link #setAllowVideoMixedMimeTypeAdaptiveness(boolean)} and {@link
-     *     #setAllowAudioMixedMimeTypeAdaptiveness(boolean)}.
-     */
-    @Deprecated
-    public ParametersBuilder setAllowMixedMimeAdaptiveness(boolean allowMixedMimeAdaptiveness) {
-      setAllowAudioMixedMimeTypeAdaptiveness(allowMixedMimeAdaptiveness);
-      setAllowVideoMixedMimeTypeAdaptiveness(allowMixedMimeAdaptiveness);
-      return this;
-    }
-
-    /** @deprecated Use {@link #setAllowVideoNonSeamlessAdaptiveness(boolean)} */
-    @Deprecated
-    public ParametersBuilder setAllowNonSeamlessAdaptiveness(boolean allowNonSeamlessAdaptiveness) {
-      return setAllowVideoNonSeamlessAdaptiveness(allowNonSeamlessAdaptiveness);
-    }
-
-    /**
      * Sets whether to exceed renderer capabilities when no selection can be made otherwise.
      *
      * <p>This parameter applies when all of the tracks available for a renderer exceed the
@@ -728,6 +755,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
           maxVideoHeight,
           maxVideoFrameRate,
           maxVideoBitrate,
+          minVideoWidth,
+          minVideoHeight,
+          minVideoFrameRate,
+          minVideoBitrate,
           exceedVideoConstraintsIfNecessary,
           allowVideoMixedMimeTypeAdaptiveness,
           allowVideoNonSeamlessAdaptiveness,
@@ -819,19 +850,6 @@ public class DefaultTrackSelector extends MappingTrackSelector {
     @SuppressWarnings("deprecation")
     public static final Parameters DEFAULT_WITHOUT_CONTEXT = new ParametersBuilder().build();
 
-    /**
-     * @deprecated This instance does not have {@link Context} constraints configured. Use {@link
-     *     #getDefaults(Context)} instead.
-     */
-    @Deprecated public static final Parameters DEFAULT_WITHOUT_VIEWPORT = DEFAULT_WITHOUT_CONTEXT;
-
-    /**
-     * @deprecated This instance does not have {@link Context} constraints configured. Use {@link
-     *     #getDefaults(Context)} instead.
-     */
-    @Deprecated
-    public static final Parameters DEFAULT = DEFAULT_WITHOUT_CONTEXT;
-
     /** Returns an instance configured with default values. */
     public static Parameters getDefaults(Context context) {
       return new ParametersBuilder(context).build();
@@ -866,6 +884,17 @@ public class DefaultTrackSelector extends MappingTrackSelector {
      * Integer#MAX_VALUE} (i.e. no constraint).
      */
     public final int maxVideoBitrate;
+    /** Minimum allowed video width in pixels. The default value is 0 (i.e. no constraint). */
+    public final int minVideoWidth;
+    /** Minimum allowed video height in pixels. The default value is 0 (i.e. no constraint). */
+    public final int minVideoHeight;
+    /** Minimum allowed video frame rate in hertz. The default value is 0 (i.e. no constraint). */
+    public final int minVideoFrameRate;
+    /**
+     * Minimum allowed video bitrate in bits per second. The default value is 0 (i.e. no
+     * constraint).
+     */
+    public final int minVideoBitrate;
     /**
      * Whether to exceed the {@link #maxVideoWidth}, {@link #maxVideoHeight} and {@link
      * #maxVideoBitrate} constraints when no selection can be made otherwise. The default value is
@@ -947,13 +976,6 @@ public class DefaultTrackSelector extends MappingTrackSelector {
      */
     public final boolean forceHighestSupportedBitrate;
     /**
-     * @deprecated Use {@link #allowVideoMixedMimeTypeAdaptiveness} and {@link
-     *     #allowAudioMixedMimeTypeAdaptiveness}.
-     */
-    @Deprecated public final boolean allowMixedMimeAdaptiveness;
-    /** @deprecated Use {@link #allowVideoNonSeamlessAdaptiveness}. */
-    @Deprecated public final boolean allowNonSeamlessAdaptiveness;
-    /**
      * Whether to exceed renderer capabilities when no selection can be made otherwise.
      *
      * <p>This parameter applies when all of the tracks available for a renderer exceed the
@@ -981,6 +1003,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
         int maxVideoHeight,
         int maxVideoFrameRate,
         int maxVideoBitrate,
+        int minVideoWidth,
+        int minVideoHeight,
+        int minVideoFrameRate,
+        int minVideoBitrate,
         boolean exceedVideoConstraintsIfNecessary,
         boolean allowVideoMixedMimeTypeAdaptiveness,
         boolean allowVideoNonSeamlessAdaptiveness,
@@ -1019,6 +1045,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       this.maxVideoHeight = maxVideoHeight;
       this.maxVideoFrameRate = maxVideoFrameRate;
       this.maxVideoBitrate = maxVideoBitrate;
+      this.minVideoWidth = minVideoWidth;
+      this.minVideoHeight = minVideoHeight;
+      this.minVideoFrameRate = minVideoFrameRate;
+      this.minVideoBitrate = minVideoBitrate;
       this.exceedVideoConstraintsIfNecessary = exceedVideoConstraintsIfNecessary;
       this.allowVideoMixedMimeTypeAdaptiveness = allowVideoMixedMimeTypeAdaptiveness;
       this.allowVideoNonSeamlessAdaptiveness = allowVideoNonSeamlessAdaptiveness;
@@ -1037,9 +1067,6 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       this.forceHighestSupportedBitrate = forceHighestSupportedBitrate;
       this.exceedRendererCapabilitiesIfNecessary = exceedRendererCapabilitiesIfNecessary;
       this.tunnelingAudioSessionId = tunnelingAudioSessionId;
-      // Deprecated fields.
-      this.allowMixedMimeAdaptiveness = allowVideoMixedMimeTypeAdaptiveness;
-      this.allowNonSeamlessAdaptiveness = allowVideoNonSeamlessAdaptiveness;
       // Overrides
       this.selectionOverrides = selectionOverrides;
       this.rendererDisabledFlags = rendererDisabledFlags;
@@ -1053,6 +1080,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       this.maxVideoHeight = in.readInt();
       this.maxVideoFrameRate = in.readInt();
       this.maxVideoBitrate = in.readInt();
+      this.minVideoWidth = in.readInt();
+      this.minVideoHeight = in.readInt();
+      this.minVideoFrameRate = in.readInt();
+      this.minVideoBitrate = in.readInt();
       this.exceedVideoConstraintsIfNecessary = Util.readBoolean(in);
       this.allowVideoMixedMimeTypeAdaptiveness = Util.readBoolean(in);
       this.allowVideoNonSeamlessAdaptiveness = Util.readBoolean(in);
@@ -1074,9 +1105,6 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       // Overrides
       this.selectionOverrides = readSelectionOverrides(in);
       this.rendererDisabledFlags = Util.castNonNull(in.readSparseBooleanArray());
-      // Deprecated fields.
-      this.allowMixedMimeAdaptiveness = allowVideoMixedMimeTypeAdaptiveness;
-      this.allowNonSeamlessAdaptiveness = allowVideoNonSeamlessAdaptiveness;
     }
 
     /**
@@ -1137,6 +1165,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
           && maxVideoHeight == other.maxVideoHeight
           && maxVideoFrameRate == other.maxVideoFrameRate
           && maxVideoBitrate == other.maxVideoBitrate
+          && minVideoWidth == other.minVideoWidth
+          && minVideoHeight == other.minVideoHeight
+          && minVideoFrameRate == other.minVideoFrameRate
+          && minVideoBitrate == other.minVideoBitrate
           && exceedVideoConstraintsIfNecessary == other.exceedVideoConstraintsIfNecessary
           && allowVideoMixedMimeTypeAdaptiveness == other.allowVideoMixedMimeTypeAdaptiveness
           && allowVideoNonSeamlessAdaptiveness == other.allowVideoNonSeamlessAdaptiveness
@@ -1169,6 +1201,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       result = 31 * result + maxVideoHeight;
       result = 31 * result + maxVideoFrameRate;
       result = 31 * result + maxVideoBitrate;
+      result = 31 * result + minVideoWidth;
+      result = 31 * result + minVideoHeight;
+      result = 31 * result + minVideoFrameRate;
+      result = 31 * result + minVideoBitrate;
       result = 31 * result + (exceedVideoConstraintsIfNecessary ? 1 : 0);
       result = 31 * result + (allowVideoMixedMimeTypeAdaptiveness ? 1 : 0);
       result = 31 * result + (allowVideoNonSeamlessAdaptiveness ? 1 : 0);
@@ -1206,6 +1242,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       dest.writeInt(maxVideoHeight);
       dest.writeInt(maxVideoFrameRate);
       dest.writeInt(maxVideoBitrate);
+      dest.writeInt(minVideoWidth);
+      dest.writeInt(minVideoHeight);
+      dest.writeInt(minVideoFrameRate);
+      dest.writeInt(minVideoBitrate);
       Util.writeBoolean(dest, exceedVideoConstraintsIfNecessary);
       Util.writeBoolean(dest, allowVideoMixedMimeTypeAdaptiveness);
       Util.writeBoolean(dest, allowVideoNonSeamlessAdaptiveness);
@@ -1449,7 +1489,12 @@ public class DefaultTrackSelector extends MappingTrackSelector {
    */
   private static final float FRACTION_TO_CONSIDER_FULLSCREEN = 0.98f;
   private static final int[] NO_TRACKS = new int[0];
+
+  // Constants that are added to a track's score when certain conditions are met. Higher scoring
+  // tracks are selected over those with lower scores.
   private static final int WITHIN_RENDERER_CAPABILITIES_BONUS = 1000;
+  private static final int SATISFIES_MIN_VIDEO_CONSTRAINTS_BONUS = 1;
+  private static final int SATISFIES_MAX_VIDEO_CONSTRAINTS_BONUS = 2;
 
   private final TrackSelection.Factory trackSelectionFactory;
   private final AtomicReference<Parameters> parametersReference;
@@ -1535,65 +1580,6 @@ public class DefaultTrackSelector extends MappingTrackSelector {
   /** Returns a new {@link ParametersBuilder} initialized with the current selection parameters. */
   public ParametersBuilder buildUponParameters() {
     return getParameters().buildUpon();
-  }
-
-  /** @deprecated Use {@link ParametersBuilder#setRendererDisabled(int, boolean)}. */
-  @Deprecated
-  public final void setRendererDisabled(int rendererIndex, boolean disabled) {
-    setParameters(buildUponParameters().setRendererDisabled(rendererIndex, disabled));
-  }
-
-  /** @deprecated Use {@link Parameters#getRendererDisabled(int)}. */
-  @Deprecated
-  public final boolean getRendererDisabled(int rendererIndex) {
-    return getParameters().getRendererDisabled(rendererIndex);
-  }
-
-  /**
-   * @deprecated Use {@link ParametersBuilder#setSelectionOverride(int, TrackGroupArray,
-   *     SelectionOverride)}.
-   */
-  @Deprecated
-  public final void setSelectionOverride(
-      int rendererIndex, TrackGroupArray groups, @Nullable SelectionOverride override) {
-    setParameters(buildUponParameters().setSelectionOverride(rendererIndex, groups, override));
-  }
-
-  /** @deprecated Use {@link Parameters#hasSelectionOverride(int, TrackGroupArray)}. */
-  @Deprecated
-  public final boolean hasSelectionOverride(int rendererIndex, TrackGroupArray groups) {
-    return getParameters().hasSelectionOverride(rendererIndex, groups);
-  }
-
-  /** @deprecated Use {@link Parameters#getSelectionOverride(int, TrackGroupArray)}. */
-  @Deprecated
-  @Nullable
-  public final SelectionOverride getSelectionOverride(int rendererIndex, TrackGroupArray groups) {
-    return getParameters().getSelectionOverride(rendererIndex, groups);
-  }
-
-  /** @deprecated Use {@link ParametersBuilder#clearSelectionOverride(int, TrackGroupArray)}. */
-  @Deprecated
-  public final void clearSelectionOverride(int rendererIndex, TrackGroupArray groups) {
-    setParameters(buildUponParameters().clearSelectionOverride(rendererIndex, groups));
-  }
-
-  /** @deprecated Use {@link ParametersBuilder#clearSelectionOverrides(int)}. */
-  @Deprecated
-  public final void clearSelectionOverrides(int rendererIndex) {
-    setParameters(buildUponParameters().clearSelectionOverrides(rendererIndex));
-  }
-
-  /** @deprecated Use {@link ParametersBuilder#clearSelectionOverrides()}. */
-  @Deprecated
-  public final void clearSelectionOverrides() {
-    setParameters(buildUponParameters().clearSelectionOverrides());
-  }
-
-  /** @deprecated Use {@link ParametersBuilder#setTunnelingAudioSessionId(int)}. */
-  @Deprecated
-  public void setTunnelingAudioSessionId(int tunnelingAudioSessionId) {
-    setParameters(buildUponParameters().setTunnelingAudioSessionId(tunnelingAudioSessionId));
   }
 
   /**
@@ -1852,6 +1838,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
               params.maxVideoHeight,
               params.maxVideoFrameRate,
               params.maxVideoBitrate,
+              params.minVideoWidth,
+              params.minVideoHeight,
+              params.minVideoFrameRate,
+              params.minVideoBitrate,
               params.viewportWidth,
               params.viewportHeight,
               params.viewportOrientationMayChange);
@@ -1871,6 +1861,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       int maxVideoHeight,
       int maxVideoFrameRate,
       int maxVideoBitrate,
+      int minVideoWidth,
+      int minVideoHeight,
+      int minVideoFrameRate,
+      int minVideoBitrate,
       int viewportWidth,
       int viewportHeight,
       boolean viewportOrientationMayChange) {
@@ -1903,6 +1897,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
                   maxVideoHeight,
                   maxVideoFrameRate,
                   maxVideoBitrate,
+                  minVideoWidth,
+                  minVideoHeight,
+                  minVideoFrameRate,
+                  minVideoBitrate,
                   selectedTrackIndices);
           if (countForMimeType > selectedMimeTypeTrackCount) {
             selectedMimeType = sampleMimeType;
@@ -1922,9 +1920,13 @@ public class DefaultTrackSelector extends MappingTrackSelector {
         maxVideoHeight,
         maxVideoFrameRate,
         maxVideoBitrate,
+        minVideoWidth,
+        minVideoHeight,
+        minVideoFrameRate,
+        minVideoBitrate,
         selectedTrackIndices);
 
-    return selectedTrackIndices.size() < 2 ? NO_TRACKS : Util.toArray(selectedTrackIndices);
+    return selectedTrackIndices.size() < 2 ? NO_TRACKS : Ints.toArray(selectedTrackIndices);
   }
 
   private static int getAdaptiveVideoTrackCountForMimeType(
@@ -1936,6 +1938,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       int maxVideoHeight,
       int maxVideoFrameRate,
       int maxVideoBitrate,
+      int minVideoWidth,
+      int minVideoHeight,
+      int minVideoFrameRate,
+      int minVideoBitrate,
       List<Integer> selectedTrackIndices) {
     int adaptiveTrackCount = 0;
     for (int i = 0; i < selectedTrackIndices.size(); i++) {
@@ -1948,7 +1954,11 @@ public class DefaultTrackSelector extends MappingTrackSelector {
           maxVideoWidth,
           maxVideoHeight,
           maxVideoFrameRate,
-          maxVideoBitrate)) {
+          maxVideoBitrate,
+          minVideoWidth,
+          minVideoHeight,
+          minVideoFrameRate,
+          minVideoBitrate)) {
         adaptiveTrackCount++;
       }
     }
@@ -1964,6 +1974,10 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       int maxVideoHeight,
       int maxVideoFrameRate,
       int maxVideoBitrate,
+      int minVideoWidth,
+      int minVideoHeight,
+      int minVideoFrameRate,
+      int minVideoBitrate,
       List<Integer> selectedTrackIndices) {
     for (int i = selectedTrackIndices.size() - 1; i >= 0; i--) {
       int trackIndex = selectedTrackIndices.get(i);
@@ -1975,7 +1989,11 @@ public class DefaultTrackSelector extends MappingTrackSelector {
           maxVideoWidth,
           maxVideoHeight,
           maxVideoFrameRate,
-          maxVideoBitrate)) {
+          maxVideoBitrate,
+          minVideoWidth,
+          minVideoHeight,
+          minVideoFrameRate,
+          minVideoBitrate)) {
         selectedTrackIndices.remove(i);
       }
     }
@@ -1989,20 +2007,32 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       int maxVideoWidth,
       int maxVideoHeight,
       int maxVideoFrameRate,
-      int maxVideoBitrate) {
-    return isSupported(formatSupport, false)
+      int maxVideoBitrate,
+      int minVideoWidth,
+      int minVideoHeight,
+      int minVideoFrameRate,
+      int minVideoBitrate) {
+    if ((format.roleFlags & C.ROLE_FLAG_TRICK_PLAY) != 0) {
+      // Ignore trick-play tracks for now.
+      return false;
+    }
+    return isSupported(formatSupport, /* allowExceedsCapabilities= */ false)
         && ((formatSupport & requiredAdaptiveSupport) != 0)
         && (mimeType == null || Util.areEqual(format.sampleMimeType, mimeType))
-        && (format.width == Format.NO_VALUE || format.width <= maxVideoWidth)
-        && (format.height == Format.NO_VALUE || format.height <= maxVideoHeight)
-        && (format.frameRate == Format.NO_VALUE || format.frameRate <= maxVideoFrameRate)
-        && (format.bitrate == Format.NO_VALUE || format.bitrate <= maxVideoBitrate);
+        && (format.width == Format.NO_VALUE
+            || (minVideoWidth <= format.width && format.width <= maxVideoWidth))
+        && (format.height == Format.NO_VALUE
+            || (minVideoHeight <= format.height && format.height <= maxVideoHeight))
+        && (format.frameRate == Format.NO_VALUE
+            || (minVideoFrameRate <= format.frameRate && format.frameRate <= maxVideoFrameRate))
+        && (format.bitrate == Format.NO_VALUE
+            || (minVideoBitrate <= format.bitrate && format.bitrate <= maxVideoBitrate));
   }
 
   @Nullable
   private static TrackSelection.Definition selectFixedVideoTrack(
       TrackGroupArray groups, @Capabilities int[][] formatSupports, Parameters params) {
-    TrackGroup selectedGroup = null;
+    @Nullable TrackGroup selectedGroup = null;
     int selectedTrackIndex = 0;
     int selectedTrackScore = 0;
     int selectedBitrate = Format.NO_VALUE;
@@ -2013,10 +2043,14 @@ public class DefaultTrackSelector extends MappingTrackSelector {
           params.viewportWidth, params.viewportHeight, params.viewportOrientationMayChange);
       @Capabilities int[] trackFormatSupport = formatSupports[groupIndex];
       for (int trackIndex = 0; trackIndex < trackGroup.length; trackIndex++) {
+        Format format = trackGroup.getFormat(trackIndex);
+        if ((format.roleFlags & C.ROLE_FLAG_TRICK_PLAY) != 0) {
+          // Ignore trick-play tracks for now.
+          continue;
+        }
         if (isSupported(trackFormatSupport[trackIndex],
             params.exceedRendererCapabilitiesIfNecessary)) {
-          Format format = trackGroup.getFormat(trackIndex);
-          boolean isWithinConstraints =
+          boolean satisfiesMaxConstraints =
               selectedTrackIndices.contains(trackIndex)
                   && (format.width == Format.NO_VALUE || format.width <= params.maxVideoWidth)
                   && (format.height == Format.NO_VALUE || format.height <= params.maxVideoHeight)
@@ -2024,32 +2058,62 @@ public class DefaultTrackSelector extends MappingTrackSelector {
                       || format.frameRate <= params.maxVideoFrameRate)
                   && (format.bitrate == Format.NO_VALUE
                       || format.bitrate <= params.maxVideoBitrate);
-          if (!isWithinConstraints && !params.exceedVideoConstraintsIfNecessary) {
+          boolean satisfiesMinConstraints =
+              selectedTrackIndices.contains(trackIndex)
+                  && (format.width == Format.NO_VALUE || format.width >= params.minVideoWidth)
+                  && (format.height == Format.NO_VALUE || format.height >= params.minVideoHeight)
+                  && (format.frameRate == Format.NO_VALUE
+                      || format.frameRate >= params.minVideoFrameRate)
+                  && (format.bitrate == Format.NO_VALUE
+                      || format.bitrate >= params.minVideoBitrate);
+          if (!satisfiesMaxConstraints && !params.exceedVideoConstraintsIfNecessary) {
             // Track should not be selected.
             continue;
           }
-          int trackScore = isWithinConstraints ? 2 : 1;
+          int trackScore = 1;
           boolean isWithinCapabilities = isSupported(trackFormatSupport[trackIndex], false);
           if (isWithinCapabilities) {
             trackScore += WITHIN_RENDERER_CAPABILITIES_BONUS;
           }
+          if (satisfiesMaxConstraints) {
+            trackScore += SATISFIES_MAX_VIDEO_CONSTRAINTS_BONUS;
+          }
+          if (satisfiesMinConstraints) {
+            trackScore += SATISFIES_MIN_VIDEO_CONSTRAINTS_BONUS;
+          }
           boolean selectTrack = trackScore > selectedTrackScore;
           if (trackScore == selectedTrackScore) {
+            // The current selection and the track being evaluated have the same score. Apply
+            // tiebreaking logic to choose between them.
             int bitrateComparison = compareFormatValues(format.bitrate, selectedBitrate);
             if (params.forceLowestBitrate && bitrateComparison != 0) {
-              // Use bitrate as a tie breaker, preferring the lower bitrate.
+              // Use bitrate as a tiebreaker, preferring the lower bitrate.
               selectTrack = bitrateComparison < 0;
             } else {
-              // Use the pixel count as a tie breaker (or bitrate if pixel counts are tied). If
-              // we're within constraints prefer a higher pixel count (or bitrate), else prefer a
-              // lower count (or bitrate). If still tied then prefer the first track (i.e. the one
-              // that's already selected).
+              // Use pixel count as a tiebreaker, followed by bitrate if pixel counts are equal.
               int formatPixelCount = format.getPixelCount();
               int comparisonResult = formatPixelCount != selectedPixelCount
                   ? compareFormatValues(formatPixelCount, selectedPixelCount)
                   : compareFormatValues(format.bitrate, selectedBitrate);
-              selectTrack = isWithinCapabilities && isWithinConstraints
-                  ? comparisonResult > 0 : comparisonResult < 0;
+              if (!isWithinCapabilities) {
+                // We're not within capabilities, so pick the lower quality because it's more likely
+                // to play successfully.
+                selectTrack = comparisonResult < 0;
+              } else if (satisfiesMinConstraints && satisfiesMaxConstraints) {
+                // All constraints are satisfied, so pick the higher quality.
+                selectTrack = comparisonResult > 0;
+              } else if (!satisfiesMinConstraints && satisfiesMaxConstraints) {
+                // Pick the higher quality because it gets us closest to satisfying the violated min
+                // constraints.
+                selectTrack = comparisonResult > 0;
+              } else if (satisfiesMinConstraints) { // !satisfiesMaxConstraints
+                // Pick the lower quality because it gets us closest to satisfying the violated max
+                // constraints.
+                selectTrack = comparisonResult > 0;
+              } else { // !satisfiesMinConstraints && !satisfiesMaxConstraints
+                // Arbitrarily pick the lower quality.
+                selectTrack = comparisonResult < 0;
+              }
             }
           }
           if (selectTrack) {
@@ -2133,11 +2197,12 @@ public class DefaultTrackSelector extends MappingTrackSelector {
           getAdaptiveAudioTracks(
               selectedGroup,
               formatSupports[selectedGroupIndex],
+              selectedTrackIndex,
               params.maxAudioBitrate,
               params.allowAudioMixedMimeTypeAdaptiveness,
               params.allowAudioMixedSampleRateAdaptiveness,
               params.allowAudioMixedChannelCountAdaptiveness);
-      if (adaptiveTracks.length > 0) {
+      if (adaptiveTracks.length > 1) {
         definition = new TrackSelection.Definition(selectedGroup, adaptiveTracks);
       }
     }
@@ -2152,100 +2217,49 @@ public class DefaultTrackSelector extends MappingTrackSelector {
   private static int[] getAdaptiveAudioTracks(
       TrackGroup group,
       @Capabilities int[] formatSupport,
+      int primaryTrackIndex,
       int maxAudioBitrate,
       boolean allowMixedMimeTypeAdaptiveness,
       boolean allowMixedSampleRateAdaptiveness,
       boolean allowAudioMixedChannelCountAdaptiveness) {
-    int selectedConfigurationTrackCount = 0;
-    AudioConfigurationTuple selectedConfiguration = null;
-    HashSet<AudioConfigurationTuple> seenConfigurationTuples = new HashSet<>();
-    for (int i = 0; i < group.length; i++) {
-      Format format = group.getFormat(i);
-      AudioConfigurationTuple configuration =
-          new AudioConfigurationTuple(
-              format.channelCount, format.sampleRate, format.sampleMimeType);
-      if (seenConfigurationTuples.add(configuration)) {
-        int configurationCount =
-            getAdaptiveAudioTrackCount(
-                group,
-                formatSupport,
-                configuration,
-                maxAudioBitrate,
-                allowMixedMimeTypeAdaptiveness,
-                allowMixedSampleRateAdaptiveness,
-                allowAudioMixedChannelCountAdaptiveness);
-        if (configurationCount > selectedConfigurationTrackCount) {
-          selectedConfiguration = configuration;
-          selectedConfigurationTrackCount = configurationCount;
-        }
-      }
-    }
-
-    if (selectedConfigurationTrackCount > 1) {
-      Assertions.checkNotNull(selectedConfiguration);
-      int[] adaptiveIndices = new int[selectedConfigurationTrackCount];
-      int index = 0;
-      for (int i = 0; i < group.length; i++) {
-        Format format = group.getFormat(i);
-        if (isSupportedAdaptiveAudioTrack(
-            format,
-            formatSupport[i],
-            selectedConfiguration,
-            maxAudioBitrate,
-            allowMixedMimeTypeAdaptiveness,
-            allowMixedSampleRateAdaptiveness,
-            allowAudioMixedChannelCountAdaptiveness)) {
-          adaptiveIndices[index++] = i;
-        }
-      }
-      return adaptiveIndices;
-    }
-    return NO_TRACKS;
-  }
-
-  private static int getAdaptiveAudioTrackCount(
-      TrackGroup group,
-      @Capabilities int[] formatSupport,
-      AudioConfigurationTuple configuration,
-      int maxAudioBitrate,
-      boolean allowMixedMimeTypeAdaptiveness,
-      boolean allowMixedSampleRateAdaptiveness,
-      boolean allowAudioMixedChannelCountAdaptiveness) {
+    Format primaryFormat = group.getFormat(primaryTrackIndex);
+    int[] adaptiveIndices = new int[group.length];
     int count = 0;
     for (int i = 0; i < group.length; i++) {
-      if (isSupportedAdaptiveAudioTrack(
-          group.getFormat(i),
-          formatSupport[i],
-          configuration,
-          maxAudioBitrate,
-          allowMixedMimeTypeAdaptiveness,
-          allowMixedSampleRateAdaptiveness,
-          allowAudioMixedChannelCountAdaptiveness)) {
-        count++;
+      if (i == primaryTrackIndex
+          || isSupportedAdaptiveAudioTrack(
+              group.getFormat(i),
+              formatSupport[i],
+              primaryFormat,
+              maxAudioBitrate,
+              allowMixedMimeTypeAdaptiveness,
+              allowMixedSampleRateAdaptiveness,
+              allowAudioMixedChannelCountAdaptiveness)) {
+        adaptiveIndices[count++] = i;
       }
     }
-    return count;
+    return Arrays.copyOf(adaptiveIndices, count);
   }
 
   private static boolean isSupportedAdaptiveAudioTrack(
       Format format,
       @Capabilities int formatSupport,
-      AudioConfigurationTuple configuration,
+      Format primaryFormat,
       int maxAudioBitrate,
       boolean allowMixedMimeTypeAdaptiveness,
       boolean allowMixedSampleRateAdaptiveness,
       boolean allowAudioMixedChannelCountAdaptiveness) {
-    return isSupported(formatSupport, false)
+    return isSupported(formatSupport, /* allowExceedsCapabilities= */ false)
         && (format.bitrate == Format.NO_VALUE || format.bitrate <= maxAudioBitrate)
         && (allowAudioMixedChannelCountAdaptiveness
             || (format.channelCount != Format.NO_VALUE
-                && format.channelCount == configuration.channelCount))
+                && format.channelCount == primaryFormat.channelCount))
         && (allowMixedMimeTypeAdaptiveness
             || (format.sampleMimeType != null
-                && TextUtils.equals(format.sampleMimeType, configuration.mimeType)))
+                && TextUtils.equals(format.sampleMimeType, primaryFormat.sampleMimeType)))
         && (allowMixedSampleRateAdaptiveness
             || (format.sampleRate != Format.NO_VALUE
-                && format.sampleRate == configuration.sampleRate));
+                && format.sampleRate == primaryFormat.sampleRate));
   }
 
   // Text track selection implementation.
@@ -2703,41 +2717,6 @@ public class DefaultTrackSelector extends MappingTrackSelector {
       }
       return 0;
     }
-  }
-
-  private static final class AudioConfigurationTuple {
-
-    public final int channelCount;
-    public final int sampleRate;
-    @Nullable public final String mimeType;
-
-    public AudioConfigurationTuple(int channelCount, int sampleRate, @Nullable String mimeType) {
-      this.channelCount = channelCount;
-      this.sampleRate = sampleRate;
-      this.mimeType = mimeType;
-    }
-
-    @Override
-    public boolean equals(@Nullable Object obj) {
-      if (this == obj) {
-        return true;
-      }
-      if (obj == null || getClass() != obj.getClass()) {
-        return false;
-      }
-      AudioConfigurationTuple other = (AudioConfigurationTuple) obj;
-      return channelCount == other.channelCount && sampleRate == other.sampleRate
-          && TextUtils.equals(mimeType, other.mimeType);
-    }
-
-    @Override
-    public int hashCode() {
-      int result = channelCount;
-      result = 31 * result + sampleRate;
-      result = 31 * result + (mimeType != null ? mimeType.hashCode() : 0);
-      return result;
-    }
-
   }
 
   /** Represents how well a text track matches the selection {@link Parameters}. */

@@ -18,11 +18,11 @@ package com.google.android.exoplayer2.offline;
 import static com.google.common.truth.Truth.assertThat;
 import static org.robolectric.shadows.ShadowBaseLooper.shadowMainLooper;
 
-import android.net.Uri;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
+import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.Renderer;
 import com.google.android.exoplayer2.RenderersFactory;
 import com.google.android.exoplayer2.Timeline;
@@ -41,7 +41,6 @@ import com.google.android.exoplayer2.trackselection.MappingTrackSelector.MappedT
 import com.google.android.exoplayer2.trackselection.TrackSelection;
 import com.google.android.exoplayer2.upstream.Allocator;
 import com.google.android.exoplayer2.util.MimeTypes;
-import com.google.android.exoplayer2.util.Util;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -60,8 +59,6 @@ import org.robolectric.annotation.LooperMode;
 @LooperMode(LooperMode.Mode.PAUSED)
 public class DownloadHelperTest {
 
-  private static final String TEST_DOWNLOAD_TYPE = "downloadType";
-  private static final String TEST_CACHE_KEY = "cacheKey";
   private static final Object TEST_MANIFEST = new Object();
   private static final Timeline TEST_TIMELINE =
       new FakeTimeline(
@@ -87,7 +84,7 @@ public class DownloadHelperTest {
   private static TrackGroupArray trackGroupArraySingle;
   private static TrackGroupArray[] trackGroupArrays;
 
-  private static Uri testUri;
+  private static MediaItem testMediaItem;
 
   private DownloadHelper downloadHelper;
 
@@ -115,26 +112,25 @@ public class DownloadHelperTest {
     trackGroupArrays =
         new TrackGroupArray[] {trackGroupArrayAll, trackGroupArraySingle};
 
-    testUri = Uri.parse("http://test.uri");
+    testMediaItem =
+        new MediaItem.Builder().setUri("http://test.uri").setCustomCacheKey("cacheKey").build();
   }
 
   @Before
   public void setUp() {
-    FakeRenderer videoRenderer = new FakeRenderer(VIDEO_FORMAT_LOW, VIDEO_FORMAT_HIGH);
-    FakeRenderer audioRenderer = new FakeRenderer(audioFormatUs, audioFormatZh);
-    FakeRenderer textRenderer = new FakeRenderer(textFormatUs, textFormatZh);
+    FakeRenderer videoRenderer = new FakeRenderer(C.TRACK_TYPE_VIDEO);
+    FakeRenderer audioRenderer = new FakeRenderer(C.TRACK_TYPE_AUDIO);
+    FakeRenderer textRenderer = new FakeRenderer(C.TRACK_TYPE_TEXT);
     RenderersFactory renderersFactory =
-        (handler, videoListener, audioListener, metadata, text, drm) ->
+        (handler, videoListener, audioListener, metadata, text) ->
             new Renderer[] {textRenderer, audioRenderer, videoRenderer};
 
     downloadHelper =
         new DownloadHelper(
-            TEST_DOWNLOAD_TYPE,
-            testUri,
-            TEST_CACHE_KEY,
+            testMediaItem,
             new TestMediaSource(),
             DownloadHelper.DEFAULT_TRACK_SELECTOR_PARAMETERS_WITHOUT_VIEWPORT,
-            Util.getRendererCapabilities(renderersFactory));
+            DownloadHelper.getRendererCapabilities(renderersFactory));
   }
 
   @Test
@@ -415,9 +411,10 @@ public class DownloadHelperTest {
 
     DownloadRequest downloadRequest = downloadHelper.getDownloadRequest(data);
 
-    assertThat(downloadRequest.type).isEqualTo(TEST_DOWNLOAD_TYPE);
-    assertThat(downloadRequest.uri).isEqualTo(testUri);
-    assertThat(downloadRequest.customCacheKey).isEqualTo(TEST_CACHE_KEY);
+    assertThat(downloadRequest.type).isEqualTo(DownloadRequest.TYPE_PROGRESSIVE);
+    assertThat(downloadRequest.uri).isEqualTo(testMediaItem.playbackProperties.uri);
+    assertThat(downloadRequest.customCacheKey)
+        .isEqualTo(testMediaItem.playbackProperties.customCacheKey);
     assertThat(downloadRequest.data).isEqualTo(data);
     assertThat(downloadRequest.streamKeys)
         .containsExactly(
@@ -455,40 +452,25 @@ public class DownloadHelperTest {
   }
 
   private static Format createVideoFormat(int bitrate) {
-    return Format.createVideoSampleFormat(
-        /* id= */ null,
-        /* sampleMimeType= */ MimeTypes.VIDEO_H264,
-        /* codecs= */ null,
-        /* bitrate= */ bitrate,
-        /* maxInputSize= */ Format.NO_VALUE,
-        /* width= */ 480,
-        /* height= */ 360,
-        /* frameRate= */ Format.NO_VALUE,
-        /* initializationData= */ null,
-        /* drmInitData= */ null);
+    return new Format.Builder()
+        .setSampleMimeType(MimeTypes.VIDEO_H264)
+        .setAverageBitrate(bitrate)
+        .build();
   }
 
   private static Format createAudioFormat(String language) {
-    return Format.createAudioSampleFormat(
-        /* id= */ null,
-        /* sampleMimeType= */ MimeTypes.AUDIO_AAC,
-        /* codecs= */ null,
-        /* bitrate= */ 48000,
-        /* maxInputSize= */ Format.NO_VALUE,
-        /* channelCount= */ 2,
-        /* sampleRate */ 44100,
-        /* initializationData= */ null,
-        /* drmInitData= */ null,
-        /* selectionFlags= */ C.SELECTION_FLAG_DEFAULT,
-        /* language= */ language);
+    return new Format.Builder()
+        .setSampleMimeType(MimeTypes.AUDIO_AAC)
+        .setLanguage(language)
+        .build();
   }
 
   private static Format createTextFormat(String language) {
-    return Format.createTextSampleFormat(
-        /* id= */ null,
-        /* sampleMimeType= */ MimeTypes.TEXT_VTT,
-        /* selectionFlags= */ C.SELECTION_FLAG_DEFAULT,
-        /* language= */ language);
+    return new Format.Builder()
+        .setSampleMimeType(MimeTypes.TEXT_VTT)
+        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+        .setLanguage(language)
+        .build();
   }
 
   private static void assertSingleTrackSelectionEquals(

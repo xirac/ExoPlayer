@@ -451,6 +451,42 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     return chunkIterators;
   }
 
+  /**
+   * Evaluates whether {@link MediaChunk MediaChunks} should be removed from the back of the queue.
+   *
+   * <p>Removing {@link MediaChunk MediaChunks} from the back of the queue can be useful if they
+   * could be replaced with chunks of a significantly higher quality (e.g. because the available
+   * bandwidth has substantially increased).
+   *
+   * <p>Will only be called if no {@link MediaChunk} in the queue is currently loading.
+   *
+   * @param playbackPositionUs The current playback position, in microseconds.
+   * @param queue The queue of buffered {@link MediaChunk MediaChunks}.
+   * @return The preferred queue size.
+   */
+  public int getPreferredQueueSize(long playbackPositionUs, List<? extends MediaChunk> queue) {
+    if (fatalError != null || trackSelection.length() < 2) {
+      return queue.size();
+    }
+    return trackSelection.evaluateQueueSize(playbackPositionUs, queue);
+  }
+
+  /**
+   * Returns whether an ongoing load of a chunk should be canceled.
+   *
+   * @param playbackPositionUs The current playback position, in microseconds.
+   * @param loadingChunk The currently loading {@link Chunk}.
+   * @param queue The queue of buffered {@link MediaChunk MediaChunks}.
+   * @return Whether the ongoing load of {@code loadingChunk} should be canceled.
+   */
+  public boolean shouldCancelLoad(
+      long playbackPositionUs, Chunk loadingChunk, List<? extends MediaChunk> queue) {
+    if (fatalError != null) {
+      return false;
+    }
+    return trackSelection.shouldCancelChunkLoad(playbackPositionUs, loadingChunk, queue);
+  }
+
   // Private methods.
 
   /**
@@ -487,9 +523,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               /* stayInBounds= */ !playlistTracker.isLive() || previous == null)
           + mediaPlaylist.mediaSequence;
     }
-    // We ignore the case of previous not having loaded completely, in which case we load the next
-    // segment.
-    return previous.getNextChunkIndex();
+    return previous.isLoadCompleted() ? previous.getNextChunkIndex() : previous.chunkIndex;
   }
 
   private long resolveTimeToLiveEdgeUs(long playbackPositionUs) {
@@ -512,7 +546,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       return null;
     }
 
-    byte[] encryptionKey = keyCache.remove(keyUri);
+    @Nullable byte[] encryptionKey = keyCache.remove(keyUri);
     if (encryptionKey != null) {
       // The key was present in the key cache. We re-insert it to prevent it from being evicted by
       // the following key addition. Note that removal of the key is necessary to affect the
@@ -520,7 +554,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       keyCache.put(keyUri, encryptionKey);
       return null;
     }
-    DataSpec dataSpec = new DataSpec(keyUri, 0, C.LENGTH_UNSET, null, DataSpec.FLAG_ALLOW_GZIP);
+    DataSpec dataSpec =
+        new DataSpec.Builder().setUri(keyUri).setFlags(DataSpec.FLAG_ALLOW_GZIP).build();
     return new EncryptionKeyChunk(
         encryptionDataSource,
         dataSpec,
@@ -646,8 +681,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       checkInBounds();
       Segment segment = playlist.segments.get((int) getCurrentIndex());
       Uri chunkUri = UriUtil.resolveToUri(playlist.baseUri, segment.url);
-      return new DataSpec(
-          chunkUri, segment.byterangeOffset, segment.byterangeLength, /* key= */ null);
+      return new DataSpec(chunkUri, segment.byteRangeOffset, segment.byteRangeLength);
     }
 
     @Override

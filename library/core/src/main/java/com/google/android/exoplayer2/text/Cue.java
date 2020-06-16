@@ -145,27 +145,32 @@ public final class Cue {
 
   /**
    * The position of the {@link #lineAnchor} of the cue box within the viewport in the direction
-   * orthogonal to the writing direction, or {@link #DIMEN_UNSET}. When set, the interpretation of
-   * the value depends on the value of {@link #lineType}.
-   * <p>
-   * For horizontal text and {@link #lineType} equal to {@link #LINE_TYPE_FRACTION}, this is the
-   * fractional vertical position relative to the top of the viewport.
+   * orthogonal to the writing direction (determined by {@link #verticalType}), or {@link
+   * #DIMEN_UNSET}. When set, the interpretation of the value depends on the value of {@link
+   * #lineType}.
+   *
+   * <p>The measurement direction depends on {@link #verticalType}:
+   *
+   * <ul>
+   *   <li>For {@link #TYPE_UNSET} (i.e. horizontal), this is the vertical position relative to the
+   *       top of the viewport.
+   *   <li>For {@link #VERTICAL_TYPE_LR} this is the horizontal position relative to the left of the
+   *       viewport.
+   *   <li>For {@link #VERTICAL_TYPE_RL} this is the horizontal position relative to the right of
+   *       the viewport.
+   * </ul>
    */
   public final float line;
 
   /**
    * The type of the {@link #line} value.
    *
-   * <p>{@link #LINE_TYPE_FRACTION} indicates that {@link #line} is a fractional position within the
-   * viewport.
-   *
    * <ul>
    *   <li>{@link #LINE_TYPE_FRACTION} indicates that {@link #line} is a fractional position within
    *       the viewport.
-   *   <li>
+   *   <li>{@link #LINE_TYPE_NUMBER} indicates that {@link #line} is a line number, where the size
+   *       of each line is taken to be the size of the first line of the cue.
    *       <ul>
-   *         <li>{@link #LINE_TYPE_NUMBER} indicates that {@link #line} is a line number, where the
-   *             size of each line is taken to be the size of the first line of the cue.
    *         <li>When {@link #line} is greater than or equal to 0 lines count from the start of the
    *             viewport, with 0 indicating zero offset from the start edge. When {@link #line} is
    *             negative lines count from the end of the viewport, with -1 indicating zero offset
@@ -206,10 +211,16 @@ public final class Cue {
   /**
    * The fractional position of the {@link #positionAnchor} of the cue box within the viewport in
    * the direction orthogonal to {@link #line}, or {@link #DIMEN_UNSET}.
-   * <p>
-   * For horizontal text, this is the horizontal position relative to the left of the viewport. Note
-   * that positioning is relative to the left of the viewport even in the case of right-to-left
-   * text.
+   *
+   * <p>The measurement direction depends on {@link #verticalType}.
+   *
+   * <ul>
+   *   <li>For {@link #TYPE_UNSET} (i.e. horizontal), this is the horizontal position relative to
+   *       the left of the viewport. Note that positioning is relative to the left of the viewport
+   *       even in the case of right-to-left text.
+   *   <li>For {@link #VERTICAL_TYPE_LR} and {@link #VERTICAL_TYPE_RL} (i.e. vertical), this is the
+   *       vertical position relative to the top of the viewport.
+   * </ul>
    */
   public final float position;
 
@@ -449,6 +460,11 @@ public final class Cue {
     this.verticalType = verticalType;
   }
 
+  /** Returns a new {@link Cue.Builder} initialized with the same values as this Cue. */
+  public Builder buildUpon() {
+    return new Cue.Builder(this);
+  }
+
   /** A builder for {@link Cue} objects. */
   public static final class Builder {
     @Nullable private CharSequence text;
@@ -485,6 +501,24 @@ public final class Cue {
       verticalType = TYPE_UNSET;
     }
 
+    private Builder(Cue cue) {
+      text = cue.text;
+      bitmap = cue.bitmap;
+      textAlignment = cue.textAlignment;
+      line = cue.line;
+      lineType = cue.lineType;
+      lineAnchor = cue.lineAnchor;
+      position = cue.position;
+      positionAnchor = cue.positionAnchor;
+      textSizeType = cue.textSizeType;
+      textSize = cue.textSize;
+      size = cue.size;
+      bitmapHeight = cue.bitmapHeight;
+      windowColorSet = cue.windowColorSet;
+      windowColor = cue.windowColor;
+      verticalType = cue.verticalType;
+    }
+
     /**
      * Sets the cue text.
      *
@@ -497,10 +531,34 @@ public final class Cue {
       return this;
     }
 
-    /** Sets the cue image. */
+    /**
+     * Gets the cue text.
+     *
+     * @see Cue#text
+     */
+    @Nullable
+    public CharSequence getText() {
+      return text;
+    }
+
+    /**
+     * Sets the cue image.
+     *
+     * @see Cue#bitmap
+     */
     public Builder setBitmap(Bitmap bitmap) {
       this.bitmap = bitmap;
       return this;
+    }
+
+    /**
+     * Gets the cue image.
+     *
+     * @see Cue#bitmap
+     */
+    @Nullable
+    public Bitmap getBitmap() {
+      return bitmap;
     }
 
     /**
@@ -513,6 +571,16 @@ public final class Cue {
     public Builder setTextAlignment(@Nullable Layout.Alignment textAlignment) {
       this.textAlignment = textAlignment;
       return this;
+    }
+
+    /**
+     * Gets the alignment of the cue text within the cue box, or null if the alignment is undefined.
+     *
+     * @see Cue#textAlignment
+     */
+    @Nullable
+    public Alignment getTextAlignment() {
+      return textAlignment;
     }
 
     /**
@@ -562,6 +630,26 @@ public final class Cue {
     }
 
     /**
+     * Gets the position of the {@code lineAnchor} of the cue box within the viewport in the
+     * direction orthogonal to the writing direction.
+     *
+     * @see Cue#line
+     */
+    public float getLine() {
+      return line;
+    }
+
+    /**
+     * Gets the type of the value of {@link #getLine()}.
+     *
+     * @see Cue#lineType
+     */
+    @LineType
+    public int getLineType() {
+      return lineType;
+    }
+
+    /**
      * Sets the cue box anchor positioned by {@link #setLine(float, int) line}.
      *
      * <p>For the normal case of horizontal text, {@link #ANCHOR_TYPE_START}, {@link
@@ -573,6 +661,16 @@ public final class Cue {
     public Builder setLineAnchor(@AnchorType int lineAnchor) {
       this.lineAnchor = lineAnchor;
       return this;
+    }
+
+    /**
+     * Gets the cue box anchor positioned by {@link #setLine(float, int) line}.
+     *
+     * @see Cue#lineAnchor
+     */
+    @AnchorType
+    public int getLineAnchor() {
+      return lineAnchor;
     }
 
     /**
@@ -591,6 +689,16 @@ public final class Cue {
     }
 
     /**
+     * Gets the fractional position of the {@link #setPositionAnchor(int) positionAnchor} of the cue
+     * box within the viewport in the direction orthogonal to {@link #setLine(float, int) line}.
+     *
+     * @see Cue#position
+     */
+    public float getPosition() {
+      return position;
+    }
+
+    /**
      * Sets the cue box anchor positioned by {@link #setPosition(float) position}.
      *
      * <p>For the normal case of horizontal text, {@link #ANCHOR_TYPE_START}, {@link
@@ -605,7 +713,17 @@ public final class Cue {
     }
 
     /**
-     * Sets the default text size type for this cue's text.
+     * Gets the cue box anchor positioned by {@link #setPosition(float) position}.
+     *
+     * @see Cue#positionAnchor
+     */
+    @AnchorType
+    public int getPositionAnchor() {
+      return positionAnchor;
+    }
+
+    /**
+     * Sets the default text size and type for this cue's text.
      *
      * @see Cue#textSize
      * @see Cue#textSizeType
@@ -617,11 +735,28 @@ public final class Cue {
     }
 
     /**
+     * Gets the default text size type for this cue's text.
+     *
+     * @see Cue#textSizeType
+     */
+    @TextSizeType
+    public int getTextSizeType() {
+      return textSizeType;
+    }
+
+    /**
+     * Gets the default text size for this cue's text.
+     *
+     * @see Cue#textSize
+     */
+    public float getTextSize() {
+      return textSize;
+    }
+
+    /**
      * Sets the size of the cue box in the writing direction specified as a fraction of the viewport
      * size in that direction.
      *
-     * @see Cue#textSize
-     * @see Cue#textSizeType
      * @see Cue#size
      */
     public Builder setSize(float size) {
@@ -630,13 +765,32 @@ public final class Cue {
     }
 
     /**
-     * Sets the bitmap height as a fraction of the of the viewport size.
+     * Gets the size of the cue box in the writing direction specified as a fraction of the viewport
+     * size in that direction.
+     *
+     * @see Cue#size
+     */
+    public float getSize() {
+      return size;
+    }
+
+    /**
+     * Sets the bitmap height as a fraction of the viewport size.
      *
      * @see Cue#bitmapHeight
      */
     public Builder setBitmapHeight(float bitmapHeight) {
       this.bitmapHeight = bitmapHeight;
       return this;
+    }
+
+    /**
+     * Gets the bitmap height as a fraction of the viewport size.
+     *
+     * @see Cue#bitmapHeight
+     */
+    public float getBitmapHeight() {
+      return bitmapHeight;
     }
 
     /**
@@ -653,6 +807,31 @@ public final class Cue {
       return this;
     }
 
+    /** Sets {@link Cue#windowColorSet} to false. */
+    public Builder clearWindowColor() {
+      this.windowColorSet = false;
+      return this;
+    }
+
+    /**
+     * Returns true if the fill color of the window is set.
+     *
+     * @see Cue#windowColorSet
+     */
+    public boolean isWindowColorSet() {
+      return windowColorSet;
+    }
+
+    /**
+     * Gets the fill color of the window.
+     *
+     * @see Cue#windowColor
+     */
+    @ColorInt
+    public int getWindowColor() {
+      return windowColor;
+    }
+
     /**
      * Sets the vertical formatting for this Cue.
      *
@@ -661,6 +840,16 @@ public final class Cue {
     public Builder setVerticalType(@VerticalType int verticalType) {
       this.verticalType = verticalType;
       return this;
+    }
+
+    /**
+     * Gets the vertical formatting for this Cue.
+     *
+     * @see Cue#verticalType
+     */
+    @VerticalType
+    public int getVerticalType() {
+      return verticalType;
     }
 
     /** Build the cue. */

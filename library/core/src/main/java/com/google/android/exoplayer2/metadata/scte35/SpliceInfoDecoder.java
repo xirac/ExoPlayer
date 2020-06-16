@@ -40,17 +40,18 @@ public final class SpliceInfoDecoder implements MetadataDecoder {
   private final ParsableByteArray sectionData;
   private final ParsableBitArray sectionHeader;
 
-  @MonotonicNonNull private TimestampAdjuster timestampAdjuster;
+  private @MonotonicNonNull TimestampAdjuster timestampAdjuster;
 
   public SpliceInfoDecoder() {
     sectionData = new ParsableByteArray();
     sectionHeader = new ParsableBitArray();
   }
 
-  @SuppressWarnings("ByteBufferBackingArray")
   @Override
   public Metadata decode(MetadataInputBuffer inputBuffer) {
     ByteBuffer buffer = Assertions.checkNotNull(inputBuffer.data);
+    Assertions.checkArgument(
+        buffer.position() == 0 && buffer.hasArray() && buffer.arrayOffset() == 0);
 
     // Internal timestamps adjustment.
     if (timestampAdjuster == null

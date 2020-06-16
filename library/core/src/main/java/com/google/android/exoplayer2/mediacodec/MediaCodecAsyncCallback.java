@@ -17,7 +17,6 @@ package com.google.android.exoplayer2.mediacodec;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
-import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
@@ -32,6 +31,7 @@ import java.util.ArrayDeque;
   private final ArrayDeque<MediaCodec.BufferInfo> bufferInfos;
   private final ArrayDeque<MediaFormat> formats;
   @Nullable private MediaFormat currentFormat;
+  @Nullable private MediaFormat pendingOutputFormat;
   @Nullable private IllegalStateException mediaCodecException;
 
   /** Creates a new MediaCodecAsyncCallback. */
@@ -112,6 +112,7 @@ import java.util.ArrayDeque;
    * and any error that was previously set.
    */
   public void flush() {
+    pendingOutputFormat = formats.isEmpty() ? null : formats.getLast();
     availableInputBuffers.clear();
     availableOutputBuffers.clear();
     bufferInfos.clear();
@@ -120,31 +121,39 @@ import java.util.ArrayDeque;
   }
 
   @Override
-  public void onInputBufferAvailable(@NonNull MediaCodec mediaCodec, int i) {
-    availableInputBuffers.add(i);
+  public void onInputBufferAvailable(MediaCodec mediaCodec, int index) {
+    availableInputBuffers.add(index);
   }
 
   @Override
   public void onOutputBufferAvailable(
-      @NonNull MediaCodec mediaCodec, int i, @NonNull MediaCodec.BufferInfo bufferInfo) {
-    availableOutputBuffers.add(i);
+      MediaCodec mediaCodec, int index, MediaCodec.BufferInfo bufferInfo) {
+    if (pendingOutputFormat != null) {
+      addOutputFormat(pendingOutputFormat);
+      pendingOutputFormat = null;
+    }
+    availableOutputBuffers.add(index);
     bufferInfos.add(bufferInfo);
   }
 
   @Override
-  public void onError(@NonNull MediaCodec mediaCodec, @NonNull MediaCodec.CodecException e) {
+  public void onError(MediaCodec mediaCodec, MediaCodec.CodecException e) {
     onMediaCodecError(e);
   }
 
   @Override
-  public void onOutputFormatChanged(
-      @NonNull MediaCodec mediaCodec, @NonNull MediaFormat mediaFormat) {
-    availableOutputBuffers.add(MediaCodec.INFO_OUTPUT_FORMAT_CHANGED);
-    formats.add(mediaFormat);
+  public void onOutputFormatChanged(MediaCodec mediaCodec, MediaFormat mediaFormat) {
+    addOutputFormat(mediaFormat);
+    pendingOutputFormat = null;
   }
 
   @VisibleForTesting()
   void onMediaCodecError(IllegalStateException e) {
     mediaCodecException = e;
+  }
+
+  private void addOutputFormat(MediaFormat mediaFormat) {
+    availableOutputBuffers.add(MediaCodec.INFO_OUTPUT_FORMAT_CHANGED);
+    formats.add(mediaFormat);
   }
 }

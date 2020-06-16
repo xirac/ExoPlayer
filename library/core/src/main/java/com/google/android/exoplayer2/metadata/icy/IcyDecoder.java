@@ -45,9 +45,10 @@ public final class IcyDecoder implements MetadataDecoder {
   }
 
   @Override
-  @SuppressWarnings("ByteBufferBackingArray")
   public Metadata decode(MetadataInputBuffer inputBuffer) {
     ByteBuffer buffer = Assertions.checkNotNull(inputBuffer.data);
+    Assertions.checkArgument(
+        buffer.position() == 0 && buffer.hasArray() && buffer.arrayOffset() == 0);
     @Nullable String icyString = decodeToString(buffer);
     byte[] icyBytes = new byte[buffer.limit()];
     buffer.get(icyBytes);
@@ -63,13 +64,17 @@ public final class IcyDecoder implements MetadataDecoder {
     while (matcher.find(index)) {
       @Nullable String key = Util.toLowerInvariant(matcher.group(1));
       @Nullable String value = matcher.group(2);
-      switch (key) {
-        case STREAM_KEY_NAME:
-          name = value;
-          break;
-        case STREAM_KEY_URL:
-          url = value;
-          break;
+      if (key != null) {
+        switch (key) {
+          case STREAM_KEY_NAME:
+            name = value;
+            break;
+          case STREAM_KEY_URL:
+            url = value;
+            break;
+          default:
+            break;
+        }
       }
       index = matcher.end();
     }

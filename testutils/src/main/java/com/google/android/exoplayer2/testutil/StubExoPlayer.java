@@ -16,9 +16,11 @@
 package com.google.android.exoplayer2.testutil;
 
 import android.os.Looper;
+import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.BasePlayer;
 import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackParameters;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.PlayerMessage;
@@ -28,6 +30,7 @@ import com.google.android.exoplayer2.source.MediaSource;
 import com.google.android.exoplayer2.source.ShuffleOrder;
 import com.google.android.exoplayer2.source.TrackGroupArray;
 import com.google.android.exoplayer2.trackselection.TrackSelectionArray;
+import com.google.android.exoplayer2.trackselection.TrackSelector;
 import java.util.List;
 
 /**
@@ -53,6 +56,11 @@ public abstract class StubExoPlayer extends BasePlayer implements ExoPlayer {
 
   @Override
   public MetadataComponent getMetadataComponent() {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public DeviceComponent getDeviceComponent() {
     throw new UnsupportedOperationException();
   }
 
@@ -88,8 +96,14 @@ public abstract class StubExoPlayer extends BasePlayer implements ExoPlayer {
     throw new UnsupportedOperationException();
   }
 
+  @Deprecated
   @Override
   public ExoPlaybackException getPlaybackError() {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public ExoPlaybackException getPlayerError() {
     throw new UnsupportedOperationException();
   }
 
@@ -129,6 +143,37 @@ public abstract class StubExoPlayer extends BasePlayer implements ExoPlayer {
   }
 
   @Override
+  public void setMediaItem(MediaItem mediaItem) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void setMediaItem(MediaItem mediaItem, long startPositionMs) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void setMediaItem(MediaItem mediaItem, boolean resetPosition) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void setMediaItems(List<MediaItem> mediaItems) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void setMediaItems(List<MediaItem> mediaItems, boolean resetPosition) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void setMediaItems(
+      List<MediaItem> mediaItems, int startWindowIndex, long startPositionMs) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public void setMediaSource(MediaSource mediaSource) {
     throw new UnsupportedOperationException();
   }
@@ -156,6 +201,26 @@ public abstract class StubExoPlayer extends BasePlayer implements ExoPlayer {
   @Override
   public void setMediaSources(
       List<MediaSource> mediaSources, int startWindowIndex, long startPositionMs) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void addMediaItem(MediaItem mediaItem) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void addMediaItem(int index, MediaItem mediaItem) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void addMediaItems(List<MediaItem> mediaItems) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void addMediaItems(int index, List<MediaItem> mediaItems) {
     throw new UnsupportedOperationException();
   }
 
@@ -249,18 +314,34 @@ public abstract class StubExoPlayer extends BasePlayer implements ExoPlayer {
     throw new UnsupportedOperationException();
   }
 
+  /** @deprecated Use {@link #setPlaybackSpeed(float)} instead. */
+  @SuppressWarnings("deprecation")
+  @Deprecated
   @Override
-  public void setPlaybackParameters(PlaybackParameters playbackParameters) {
+  public void setPlaybackParameters(@Nullable PlaybackParameters playbackParameters) {
     throw new UnsupportedOperationException();
   }
 
+  /** @deprecated Use {@link #getPlaybackSpeed()} instead. */
+  @SuppressWarnings("deprecation")
+  @Deprecated
   @Override
   public PlaybackParameters getPlaybackParameters() {
     throw new UnsupportedOperationException();
   }
 
   @Override
-  public void setSeekParameters(SeekParameters seekParameters) {
+  public void setPlaybackSpeed(float playbackSpeed) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public float getPlaybackSpeed() {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void setSeekParameters(@Nullable SeekParameters seekParameters) {
     throw new UnsupportedOperationException();
   }
 
@@ -291,6 +372,12 @@ public abstract class StubExoPlayer extends BasePlayer implements ExoPlayer {
 
   @Override
   public int getRendererType(int index) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  @Nullable
+  public TrackSelector getTrackSelector() {
     throw new UnsupportedOperationException();
   }
 
@@ -366,6 +453,16 @@ public abstract class StubExoPlayer extends BasePlayer implements ExoPlayer {
 
   @Override
   public void setForegroundMode(boolean foregroundMode) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public void setPauseAtEndOfMediaItems(boolean pauseAtEndOfMediaItems) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public boolean getPauseAtEndOfMediaItems() {
     throw new UnsupportedOperationException();
   }
 }

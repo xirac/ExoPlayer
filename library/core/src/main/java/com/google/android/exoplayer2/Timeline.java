@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2;
 
+import android.net.Uri;
 import android.os.SystemClock;
 import android.util.Pair;
 import androidx.annotation.Nullable;
@@ -123,14 +124,23 @@ public abstract class Timeline {
      */
     public static final Object SINGLE_WINDOW_UID = new Object();
 
+    private static final MediaItem DUMMY_MEDIA_ITEM =
+        new MediaItem.Builder()
+            .setMediaId("com.google.android.exoplayer2.Timeline")
+            .setUri(Uri.EMPTY)
+            .build();
+
     /**
      * A unique identifier for the window. Single-window {@link Timeline Timelines} must use {@link
      * #SINGLE_WINDOW_UID}.
      */
     public Object uid;
 
-    /** A tag for the window. Not necessarily unique. */
-    @Nullable public Object tag;
+    /** @deprecated Use {@link #mediaItem} instead. */
+    @Deprecated @Nullable public Object tag;
+
+    /** The {@link MediaItem} associated to the window. Not necessarily unique. */
+    public MediaItem mediaItem;
 
     /** The manifest of the window. May be {@code null}. */
     @Nullable public Object manifest;
@@ -176,6 +186,12 @@ public abstract class Timeline {
      */
     public boolean isLive;
 
+    /**
+     * Whether this window contains placeholder information because the real information has yet to
+     * be loaded.
+     */
+    public boolean isPlaceholder;
+
     /** The index of the first period that belongs to this window. */
     public int firstPeriodIndex;
 
@@ -206,9 +222,14 @@ public abstract class Timeline {
     /** Creates window. */
     public Window() {
       uid = SINGLE_WINDOW_UID;
+      mediaItem = DUMMY_MEDIA_ITEM;
     }
 
-    /** Sets the data held by this window. */
+    /**
+     * @deprecated Use {@link #set(Object, MediaItem, Object, long, long, long, boolean, boolean,
+     *     boolean, long, long, int, int, long)} instead.
+     */
+    @Deprecated
     public Window set(
         Object uid,
         @Nullable Object tag,
@@ -224,8 +245,47 @@ public abstract class Timeline {
         int firstPeriodIndex,
         int lastPeriodIndex,
         long positionInFirstPeriodUs) {
+      set(
+          uid,
+          DUMMY_MEDIA_ITEM.buildUpon().setTag(tag).build(),
+          manifest,
+          presentationStartTimeMs,
+          windowStartTimeMs,
+          elapsedRealtimeEpochOffsetMs,
+          isSeekable,
+          isDynamic,
+          isLive,
+          defaultPositionUs,
+          durationUs,
+          firstPeriodIndex,
+          lastPeriodIndex,
+          positionInFirstPeriodUs);
+      return this;
+    }
+
+    /** Sets the data held by this window. */
+    @SuppressWarnings("deprecation")
+    public Window set(
+        Object uid,
+        @Nullable MediaItem mediaItem,
+        @Nullable Object manifest,
+        long presentationStartTimeMs,
+        long windowStartTimeMs,
+        long elapsedRealtimeEpochOffsetMs,
+        boolean isSeekable,
+        boolean isDynamic,
+        boolean isLive,
+        long defaultPositionUs,
+        long durationUs,
+        int firstPeriodIndex,
+        int lastPeriodIndex,
+        long positionInFirstPeriodUs) {
       this.uid = uid;
-      this.tag = tag;
+      this.mediaItem = mediaItem != null ? mediaItem : DUMMY_MEDIA_ITEM;
+      this.tag =
+          mediaItem != null && mediaItem.playbackProperties != null
+              ? mediaItem.playbackProperties.tag
+              : null;
       this.manifest = manifest;
       this.presentationStartTimeMs = presentationStartTimeMs;
       this.windowStartTimeMs = windowStartTimeMs;
@@ -238,6 +298,7 @@ public abstract class Timeline {
       this.firstPeriodIndex = firstPeriodIndex;
       this.lastPeriodIndex = lastPeriodIndex;
       this.positionInFirstPeriodUs = positionInFirstPeriodUs;
+      this.isPlaceholder = false;
       return this;
     }
 
@@ -301,6 +362,7 @@ public abstract class Timeline {
       return Util.getNowUnixTimeMs(elapsedRealtimeEpochOffsetMs);
     }
 
+    // Provide backward compatibility for tag.
     @Override
     public boolean equals(@Nullable Object obj) {
       if (this == obj) {
@@ -311,7 +373,7 @@ public abstract class Timeline {
       }
       Window that = (Window) obj;
       return Util.areEqual(uid, that.uid)
-          && Util.areEqual(tag, that.tag)
+          && Util.areEqual(mediaItem, that.mediaItem)
           && Util.areEqual(manifest, that.manifest)
           && presentationStartTimeMs == that.presentationStartTimeMs
           && windowStartTimeMs == that.windowStartTimeMs
@@ -319,6 +381,7 @@ public abstract class Timeline {
           && isSeekable == that.isSeekable
           && isDynamic == that.isDynamic
           && isLive == that.isLive
+          && isPlaceholder == that.isPlaceholder
           && defaultPositionUs == that.defaultPositionUs
           && durationUs == that.durationUs
           && firstPeriodIndex == that.firstPeriodIndex
@@ -326,11 +389,12 @@ public abstract class Timeline {
           && positionInFirstPeriodUs == that.positionInFirstPeriodUs;
     }
 
+    // Provide backward compatibility for tag.
     @Override
     public int hashCode() {
       int result = 7;
       result = 31 * result + uid.hashCode();
-      result = 31 * result + (tag == null ? 0 : tag.hashCode());
+      result = 31 * result + mediaItem.hashCode();
       result = 31 * result + (manifest == null ? 0 : manifest.hashCode());
       result = 31 * result + (int) (presentationStartTimeMs ^ (presentationStartTimeMs >>> 32));
       result = 31 * result + (int) (windowStartTimeMs ^ (windowStartTimeMs >>> 32));
@@ -340,6 +404,7 @@ public abstract class Timeline {
       result = 31 * result + (isSeekable ? 1 : 0);
       result = 31 * result + (isDynamic ? 1 : 0);
       result = 31 * result + (isLive ? 1 : 0);
+      result = 31 * result + (isPlaceholder ? 1 : 0);
       result = 31 * result + (int) (defaultPositionUs ^ (defaultPositionUs >>> 32));
       result = 31 * result + (int) (durationUs ^ (durationUs >>> 32));
       result = 31 * result + firstPeriodIndex;
@@ -492,8 +557,8 @@ public abstract class Timeline {
      * microseconds.
      *
      * @param adGroupIndex The ad group index.
-     * @return The time of the ad group at the index, in microseconds, or {@link
-     *     C#TIME_END_OF_SOURCE} for a post-roll ad group.
+     * @return The time of the ad group at the index relative to the start of the enclosing {@link
+     *     Period}, in microseconds, or {@link C#TIME_END_OF_SOURCE} for a post-roll ad group.
      */
     public long getAdGroupTimeUs(int adGroupIndex) {
       return adPlaybackState.adGroupTimesUs[adGroupIndex];
@@ -536,22 +601,23 @@ public abstract class Timeline {
     }
 
     /**
-     * Returns the index of the ad group at or before {@code positionUs}, if that ad group is
-     * unplayed. Returns {@link C#INDEX_UNSET} if the ad group at or before {@code positionUs} has
-     * no ads remaining to be played, or if there is no such ad group.
+     * Returns the index of the ad group at or before {@code positionUs} in the period, if that ad
+     * group is unplayed. Returns {@link C#INDEX_UNSET} if the ad group at or before {@code
+     * positionUs} has no ads remaining to be played, or if there is no such ad group.
      *
-     * @param positionUs The position at or before which to find an ad group, in microseconds.
+     * @param positionUs The period position at or before which to find an ad group, in
+     *     microseconds.
      * @return The index of the ad group, or {@link C#INDEX_UNSET}.
      */
     public int getAdGroupIndexForPositionUs(long positionUs) {
-      return adPlaybackState.getAdGroupIndexForPositionUs(positionUs);
+      return adPlaybackState.getAdGroupIndexForPositionUs(positionUs, durationUs);
     }
 
     /**
-     * Returns the index of the next ad group after {@code positionUs} that has ads remaining to be
-     * played. Returns {@link C#INDEX_UNSET} if there is no such ad group.
+     * Returns the index of the next ad group after {@code positionUs} in the period that has ads
+     * remaining to be played. Returns {@link C#INDEX_UNSET} if there is no such ad group.
      *
-     * @param positionUs The position after which to find an ad group, in microseconds.
+     * @param positionUs The period position after which to find an ad group, in microseconds.
      * @return The index of the ad group, or {@link C#INDEX_UNSET}.
      */
     public int getAdGroupIndexAfterPositionUs(long positionUs) {
@@ -628,7 +694,7 @@ public abstract class Timeline {
       result = 31 * result + windowIndex;
       result = 31 * result + (int) (durationUs ^ (durationUs >>> 32));
       result = 31 * result + (int) (positionInWindowUs ^ (positionInWindowUs >>> 32));
-      result = 31 * result + (adPlaybackState == null ? 0 : adPlaybackState.hashCode());
+      result = 31 * result + adPlaybackState.hashCode();
       return result;
     }
   }

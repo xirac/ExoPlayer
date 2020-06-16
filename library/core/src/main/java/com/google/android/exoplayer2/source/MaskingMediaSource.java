@@ -15,10 +15,12 @@
  */
 package com.google.android.exoplayer2.source;
 
+import android.net.Uri;
 import android.util.Pair;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 import com.google.android.exoplayer2.C;
+import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.Timeline.Window;
 import com.google.android.exoplayer2.source.MediaSourceEventListener.EventDispatcher;
@@ -26,7 +28,7 @@ import com.google.android.exoplayer2.upstream.Allocator;
 import com.google.android.exoplayer2.upstream.TransferListener;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.Util;
-import java.io.IOException;
+import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
 /**
  * A {@link MediaSource} that masks the {@link Timeline} with a placeholder until the actual media
@@ -59,14 +61,17 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
     this.useLazyPreparation = useLazyPreparation && mediaSource.isSingleWindow();
     window = new Timeline.Window();
     period = new Timeline.Period();
-    Timeline initialTimeline = mediaSource.getInitialTimeline();
+    @Nullable Timeline initialTimeline = mediaSource.getInitialTimeline();
     if (initialTimeline != null) {
       timeline =
           MaskingTimeline.createWithRealTimeline(
               initialTimeline, /* firstWindowUid= */ null, /* firstPeriodUid= */ null);
       hasRealTimeline = true;
     } else {
-      timeline = MaskingTimeline.createWithDummyTimeline(mediaSource.getTag());
+      // TODO(bachinger) Use mediasSource.getMediaItem() to provide the media item.
+      timeline =
+          MaskingTimeline.createWithDummyTimeline(
+              new MediaItem.Builder().setUri(Uri.EMPTY).setTag(mediaSource.getTag()).build());
     }
   }
 
@@ -84,15 +89,15 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
     }
   }
 
-  @Nullable
   @Override
+  @Nullable
   public Object getTag() {
     return mediaSource.getTag();
   }
 
   @Override
   @SuppressWarnings("MissingSuperCall")
-  public void maybeThrowSourceInfoRefreshError() throws IOException {
+  public void maybeThrowSourceInfoRefreshError() {
     // Do nothing. Source info refresh errors will be thrown when calling
     // MaskingMediaPeriod.maybeThrowPrepareError.
   }
@@ -141,8 +146,14 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
   @Override
   protected synchronized void onChildSourceInfoRefreshed(
       Void id, MediaSource mediaSource, Timeline newTimeline) {
+    @Nullable MediaPeriodId idForMaskingPeriodPreparation = null;
     if (isPrepared) {
       timeline = timeline.cloneWithUpdatedTimeline(newTimeline);
+      if (unpreparedMaskingMediaPeriod != null) {
+        // Reset override in case the duration changed and we need to update our override.
+        setPreparePositionOverrideToUnpreparedMaskingPeriod(
+            unpreparedMaskingMediaPeriod.getPreparePositionOverrideUs());
+      }
     } else if (newTimeline.isEmpty()) {
       timeline =
           hasRealTimeline
@@ -182,19 +193,22 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
               : MaskingTimeline.createWithRealTimeline(newTimeline, windowUid, periodUid);
       if (unpreparedMaskingMediaPeriod != null) {
         MaskingMediaPeriod maskingPeriod = unpreparedMaskingMediaPeriod;
-        maskingPeriod.overridePreparePositionUs(periodPositionUs);
-        MediaPeriodId idInSource =
+        setPreparePositionOverrideToUnpreparedMaskingPeriod(periodPositionUs);
+        idForMaskingPeriodPreparation =
             maskingPeriod.id.copyWithPeriodUid(getInternalPeriodUid(maskingPeriod.id.periodUid));
-        maskingPeriod.createPeriod(idInSource);
       }
     }
     hasRealTimeline = true;
     isPrepared = true;
     refreshSourceInfo(this.timeline);
+    if (idForMaskingPeriodPreparation != null) {
+      Assertions.checkNotNull(unpreparedMaskingMediaPeriod)
+          .createPeriod(idForMaskingPeriodPreparation);
+    }
   }
 
-  @Nullable
   @Override
+  @Nullable
   protected MediaPeriodId getMediaPeriodIdForChildMediaPeriodId(
       Void id, MediaPeriodId mediaPeriodId) {
     return mediaPeriodId.copyWithPeriodUid(getExternalPeriodUid(mediaPeriodId.periodUid));
@@ -222,6 +236,27 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
         : internalPeriodUid;
   }
 
+  @RequiresNonNull("unpreparedMaskingMediaPeriod")
+  private void setPreparePositionOverrideToUnpreparedMaskingPeriod(long preparePositionOverrideUs) {
+    MaskingMediaPeriod maskingPeriod = unpreparedMaskingMediaPeriod;
+    int maskingPeriodIndex = timeline.getIndexOfPeriod(maskingPeriod.id.periodUid);
+    if (maskingPeriodIndex == C.INDEX_UNSET) {
+      // The new timeline doesn't contain this period anymore. This can happen if the media source
+      // has multiple periods and removed the first period with a timeline update. Ignore the
+      // update, as the non-existing period will be released anyway as soon as the player receives
+      // this new timeline.
+      return;
+    }
+    long periodDurationUs = timeline.getPeriod(maskingPeriodIndex, period).durationUs;
+    if (periodDurationUs != C.TIME_UNSET) {
+      // Ensure the overridden position doesn't exceed the period duration.
+      if (preparePositionOverrideUs >= periodDurationUs) {
+        preparePositionOverrideUs = Math.max(0, periodDurationUs - 1);
+      }
+    }
+    maskingPeriod.overridePreparePositionUs(preparePositionOverrideUs);
+  }
+
   /**
    * Timeline used as placeholder for an unprepared media source. After preparation, a
    * MaskingTimeline is used to keep the originally assigned dummy period ID.
@@ -238,9 +273,9 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
      *
      * @param windowTag A window tag.
      */
-    public static MaskingTimeline createWithDummyTimeline(@Nullable Object windowTag) {
+    public static MaskingTimeline createWithDummyTimeline(MediaItem mediaItem) {
       return new MaskingTimeline(
-          new DummyTimeline(windowTag), Window.SINGLE_WINDOW_UID, DUMMY_EXTERNAL_PERIOD_UID);
+          new DummyTimeline(mediaItem), Window.SINGLE_WINDOW_UID, DUMMY_EXTERNAL_PERIOD_UID);
     }
 
     /**
@@ -318,10 +353,11 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
   @VisibleForTesting
   public static final class DummyTimeline extends Timeline {
 
-    @Nullable private final Object tag;
+    private final MediaItem mediaItem;
 
-    public DummyTimeline(@Nullable Object tag) {
-      this.tag = tag;
+    /** Creates a new instance with the given media item. */
+    public DummyTimeline(MediaItem mediaItem) {
+      this.mediaItem = mediaItem;
     }
 
     @Override
@@ -331,9 +367,9 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
 
     @Override
     public Window getWindow(int windowIndex, Window window, long defaultPositionProjectionUs) {
-      return window.set(
+      window.set(
           Window.SINGLE_WINDOW_UID,
-          tag,
+          mediaItem,
           /* manifest= */ null,
           /* presentationStartTimeMs= */ C.TIME_UNSET,
           /* windowStartTimeMs= */ C.TIME_UNSET,
@@ -347,6 +383,8 @@ public final class MaskingMediaSource extends CompositeMediaSource<Void> {
           /* firstPeriodIndex= */ 0,
           /* lastPeriodIndex= */ 0,
           /* positionInFirstPeriodUs= */ 0);
+      window.isPlaceholder = true;
+      return window;
     }
 
     @Override

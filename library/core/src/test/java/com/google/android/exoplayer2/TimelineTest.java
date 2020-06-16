@@ -17,6 +17,8 @@ package com.google.android.exoplayer2;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import android.net.Uri;
+import androidx.annotation.Nullable;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.testutil.FakeTimeline;
 import com.google.android.exoplayer2.testutil.FakeTimeline.TimelineWindowDefinition;
@@ -29,12 +31,12 @@ import org.junit.runner.RunWith;
 public class TimelineTest {
 
   @Test
-  public void testEmptyTimeline() {
+  public void emptyTimeline() {
     TimelineAsserts.assertEmpty(Timeline.EMPTY);
   }
 
   @Test
-  public void testSinglePeriodTimeline() {
+  public void singlePeriodTimeline() {
     Timeline timeline = new FakeTimeline(new TimelineWindowDefinition(1, 111));
     TimelineAsserts.assertWindowTags(timeline, 111);
     TimelineAsserts.assertPeriodCounts(timeline, 1);
@@ -48,7 +50,7 @@ public class TimelineTest {
   }
 
   @Test
-  public void testMultiPeriodTimeline() {
+  public void multiPeriodTimeline() {
     Timeline timeline = new FakeTimeline(new TimelineWindowDefinition(5, 111));
     TimelineAsserts.assertWindowTags(timeline, 111);
     TimelineAsserts.assertPeriodCounts(timeline, 5);
@@ -62,12 +64,13 @@ public class TimelineTest {
   }
 
   @Test
-  public void testWindowEquals() {
+  public void windowEquals() {
+    MediaItem mediaItem = new MediaItem.Builder().setUri("uri").setTag(new Object()).build();
     Timeline.Window window = new Timeline.Window();
     assertThat(window).isEqualTo(new Timeline.Window());
 
     Timeline.Window otherWindow = new Timeline.Window();
-    otherWindow.tag = new Object();
+    otherWindow.mediaItem = mediaItem;
     assertThat(window).isNotEqualTo(otherWindow);
 
     otherWindow = new Timeline.Window();
@@ -95,6 +98,10 @@ public class TimelineTest {
     assertThat(window).isNotEqualTo(otherWindow);
 
     otherWindow = new Timeline.Window();
+    otherWindow.isPlaceholder = true;
+    assertThat(window).isNotEqualTo(otherWindow);
+
+    otherWindow = new Timeline.Window();
     otherWindow.defaultPositionUs = C.TIME_UNSET;
     assertThat(window).isNotEqualTo(otherWindow);
 
@@ -114,19 +121,39 @@ public class TimelineTest {
     otherWindow.positionInFirstPeriodUs = C.TIME_UNSET;
     assertThat(window).isNotEqualTo(otherWindow);
 
-    window.uid = new Object();
-    window.tag = new Object();
-    window.manifest = new Object();
-    window.presentationStartTimeMs = C.TIME_UNSET;
-    window.windowStartTimeMs = C.TIME_UNSET;
-    window.isSeekable = true;
-    window.isDynamic = true;
-    window.isLive = true;
-    window.defaultPositionUs = C.TIME_UNSET;
-    window.durationUs = C.TIME_UNSET;
-    window.firstPeriodIndex = 1;
-    window.lastPeriodIndex = 1;
-    window.positionInFirstPeriodUs = C.TIME_UNSET;
+    window = populateWindow(mediaItem, mediaItem.playbackProperties.tag);
+    otherWindow =
+        otherWindow.set(
+            window.uid,
+            window.mediaItem,
+            window.manifest,
+            window.presentationStartTimeMs,
+            window.windowStartTimeMs,
+            window.elapsedRealtimeEpochOffsetMs,
+            window.isSeekable,
+            window.isDynamic,
+            window.isLive,
+            window.defaultPositionUs,
+            window.durationUs,
+            window.firstPeriodIndex,
+            window.lastPeriodIndex,
+            window.positionInFirstPeriodUs);
+    assertThat(window).isEqualTo(otherWindow);
+  }
+
+  @SuppressWarnings("deprecation")
+  @Test
+  public void windowSet_withTag() {
+    Object tag = new Object();
+    Timeline.Window window =
+        populateWindow(
+            new MediaItem.Builder()
+                .setMediaId("com.google.android.exoplayer2.Timeline")
+                .setUri(Uri.EMPTY)
+                .setTag(tag)
+                .build(),
+            tag);
+    Timeline.Window otherWindow = new Timeline.Window();
     otherWindow =
         otherWindow.set(
             window.uid,
@@ -147,19 +174,19 @@ public class TimelineTest {
   }
 
   @Test
-  public void testWindowHashCode() {
+  public void windowHashCode() {
     Timeline.Window window = new Timeline.Window();
     Timeline.Window otherWindow = new Timeline.Window();
     assertThat(window.hashCode()).isEqualTo(otherWindow.hashCode());
 
-    window.tag = new Object();
+    window.mediaItem = new MediaItem.Builder().setMediaId("mediaId").setTag(new Object()).build();
     assertThat(window.hashCode()).isNotEqualTo(otherWindow.hashCode());
-    otherWindow.tag = window.tag;
+    otherWindow.mediaItem = window.mediaItem;
     assertThat(window.hashCode()).isEqualTo(otherWindow.hashCode());
   }
 
   @Test
-  public void testPeriodEquals() {
+  public void periodEquals() {
     Timeline.Period period = new Timeline.Period();
     assertThat(period).isEqualTo(new Timeline.Period());
 
@@ -195,7 +222,7 @@ public class TimelineTest {
   }
 
   @Test
-  public void testPeriodHashCode() {
+  public void periodHashCode() {
     Timeline.Period period = new Timeline.Period();
     Timeline.Period otherPeriod = new Timeline.Period();
     assertThat(period.hashCode()).isEqualTo(otherPeriod.hashCode());
@@ -204,5 +231,26 @@ public class TimelineTest {
     assertThat(period.hashCode()).isNotEqualTo(otherPeriod.hashCode());
     otherPeriod.windowIndex = period.windowIndex;
     assertThat(period.hashCode()).isEqualTo(otherPeriod.hashCode());
+  }
+
+  @SuppressWarnings("deprecation") // Populates the deprecated window.tag property.
+  private static Timeline.Window populateWindow(
+      @Nullable MediaItem mediaItem, @Nullable Object tag) {
+    Timeline.Window window = new Timeline.Window();
+    window.uid = new Object();
+    window.tag = tag;
+    window.mediaItem = mediaItem;
+    window.manifest = new Object();
+    window.presentationStartTimeMs = C.TIME_UNSET;
+    window.windowStartTimeMs = C.TIME_UNSET;
+    window.isSeekable = true;
+    window.isDynamic = true;
+    window.isLive = true;
+    window.defaultPositionUs = C.TIME_UNSET;
+    window.durationUs = C.TIME_UNSET;
+    window.firstPeriodIndex = 1;
+    window.lastPeriodIndex = 1;
+    window.positionInFirstPeriodUs = C.TIME_UNSET;
+    return window;
   }
 }

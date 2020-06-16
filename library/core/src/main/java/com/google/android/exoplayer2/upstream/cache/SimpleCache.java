@@ -16,7 +16,6 @@
 package com.google.android.exoplayer2.upstream.cache;
 
 import android.os.ConditionVariable;
-import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
 import com.google.android.exoplayer2.C;
@@ -260,7 +259,7 @@ public final class SimpleCache implements Cache {
 
     // Start cache initialization.
     final ConditionVariable conditionVariable = new ConditionVariable();
-    new Thread("SimpleCache.initialize()") {
+    new Thread("ExoPlayer:SimpleCacheInit") {
       @Override
       public void run() {
         synchronized (SimpleCache.this) {
@@ -332,7 +331,6 @@ public final class SimpleCache implements Cache {
     }
   }
 
-  @NonNull
   @Override
   public synchronized NavigableSet<CacheSpan> getCachedSpans(String key) {
     Assertions.checkState(!released);
@@ -355,13 +353,13 @@ public final class SimpleCache implements Cache {
   }
 
   @Override
-  public synchronized CacheSpan startReadWrite(String key, long position)
+  public synchronized CacheSpan startReadWrite(String key, long position, long length)
       throws InterruptedException, CacheException {
     Assertions.checkState(!released);
     checkInitialization();
 
     while (true) {
-      CacheSpan span = startReadWriteNonBlocking(key, position);
+      CacheSpan span = startReadWriteNonBlocking(key, position, length);
       if (span != null) {
         return span;
       } else {
@@ -377,12 +375,12 @@ public final class SimpleCache implements Cache {
 
   @Override
   @Nullable
-  public synchronized CacheSpan startReadWriteNonBlocking(String key, long position)
+  public synchronized CacheSpan startReadWriteNonBlocking(String key, long position, long length)
       throws CacheException {
     Assertions.checkState(!released);
     checkInitialization();
 
-    SimpleCacheSpan span = getSpan(key, position);
+    SimpleCacheSpan span = getSpan(key, position, length);
 
     if (span.isCached) {
       // Read case.
@@ -390,9 +388,8 @@ public final class SimpleCache implements Cache {
     }
 
     CachedContent cachedContent = contentIndex.getOrAdd(key);
-    if (!cachedContent.isLocked()) {
+    if (cachedContent.lockRange(position, span.length)) {
       // Write case.
-      cachedContent.setLocked(true);
       return span;
     }
 
@@ -407,7 +404,7 @@ public final class SimpleCache implements Cache {
 
     CachedContent cachedContent = contentIndex.get(key);
     Assertions.checkNotNull(cachedContent);
-    Assertions.checkState(cachedContent.isLocked());
+    Assertions.checkState(cachedContent.isFullyLocked(position, length));
     if (!cacheDir.exists()) {
       // For some reason the cache directory doesn't exist. Make a best effort to create it.
       cacheDir.mkdirs();
@@ -437,7 +434,7 @@ public final class SimpleCache implements Cache {
     SimpleCacheSpan span =
         Assertions.checkNotNull(SimpleCacheSpan.createCacheEntry(file, length, contentIndex));
     CachedContent cachedContent = Assertions.checkNotNull(contentIndex.get(span.key));
-    Assertions.checkState(cachedContent.isLocked());
+    Assertions.checkState(cachedContent.isFullyLocked(span.position, span.length));
 
     // Check if the span conflicts with the set content length
     long contentLength = ContentMetadata.getContentLength(cachedContent.getMetadata());
@@ -466,10 +463,17 @@ public final class SimpleCache implements Cache {
   public synchronized void releaseHoleSpan(CacheSpan holeSpan) {
     Assertions.checkState(!released);
     CachedContent cachedContent = Assertions.checkNotNull(contentIndex.get(holeSpan.key));
-    Assertions.checkState(cachedContent.isLocked());
-    cachedContent.setLocked(false);
+    cachedContent.unlockRange(holeSpan.position);
     contentIndex.maybeRemove(cachedContent.key);
     notifyAll();
+  }
+
+  @Override
+  public synchronized void removeResource(String key) {
+    Assertions.checkState(!released);
+    for (CacheSpan span : getCachedSpans(key)) {
+      removeSpanInternal(span);
+    }
   }
 
   @Override
@@ -488,8 +492,34 @@ public final class SimpleCache implements Cache {
   @Override
   public synchronized long getCachedLength(String key, long position, long length) {
     Assertions.checkState(!released);
+    if (length == C.LENGTH_UNSET) {
+      length = Long.MAX_VALUE;
+    }
     @Nullable CachedContent cachedContent = contentIndex.get(key);
     return cachedContent != null ? cachedContent.getCachedBytesLength(position, length) : -length;
+  }
+
+  @Override
+  public synchronized long getCachedBytes(String key, long position, long length) {
+    long endPosition = length == C.LENGTH_UNSET ? Long.MAX_VALUE : position + length;
+    if (endPosition < 0) {
+      // The calculation rolled over (length is probably Long.MAX_VALUE).
+      endPosition = Long.MAX_VALUE;
+    }
+    long currentPosition = position;
+    long cachedBytes = 0;
+    while (currentPosition < endPosition) {
+      long maxRemainingLength = endPosition - currentPosition;
+      long blockLength = getCachedLength(key, currentPosition, maxRemainingLength);
+      if (blockLength > 0) {
+        cachedBytes += blockLength;
+      } else {
+        // There's a hole of length -blockLength.
+        blockLength = -blockLength;
+      }
+      currentPosition += blockLength;
+    }
+    return cachedBytes;
   }
 
   @Override
@@ -656,23 +686,21 @@ public final class SimpleCache implements Cache {
   }
 
   /**
-   * Returns the cache span corresponding to the provided lookup span.
-   *
-   * <p>If the lookup position is contained by an existing entry in the cache, then the returned
-   * span defines the file in which the data is stored. If the lookup position is not contained by
-   * an existing entry, then the returned span defines the maximum extents of the hole in the cache.
+   * Returns the cache span corresponding to the provided key and range. See {@link
+   * Cache#startReadWrite(String, long, long)} for detailed descriptions of the returned spans.
    *
    * @param key The key of the span being requested.
    * @param position The position of the span being requested.
+   * @param length The length of the span, or {@link C#LENGTH_UNSET} if unbounded.
    * @return The corresponding cache {@link SimpleCacheSpan}.
    */
-  private SimpleCacheSpan getSpan(String key, long position) {
+  private SimpleCacheSpan getSpan(String key, long position, long length) {
     @Nullable CachedContent cachedContent = contentIndex.get(key);
     if (cachedContent == null) {
-      return SimpleCacheSpan.createOpenHole(key, position);
+      return SimpleCacheSpan.createHole(key, position, length);
     }
     while (true) {
-      SimpleCacheSpan span = cachedContent.getSpan(position);
+      SimpleCacheSpan span = cachedContent.getSpan(position, length);
       if (span.isCached && span.file.length() != span.length) {
         // The file has been modified or deleted underneath us. It's likely that other files will
         // have been modified too, so scan the whole in-memory representation.

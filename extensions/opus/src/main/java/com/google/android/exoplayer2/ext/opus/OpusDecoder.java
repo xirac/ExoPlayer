@@ -36,10 +36,8 @@ import java.util.List;
 
   private static final int DEFAULT_SEEK_PRE_ROLL_SAMPLES = 3840;
 
-  /**
-   * Opus streams are always decoded at 48000 Hz.
-   */
-  private static final int SAMPLE_RATE = 48000;
+  /** Opus streams are always decoded at 48000 Hz. */
+  private static final int SAMPLE_RATE = 48_000;
 
   private static final int NO_ERROR = 0;
   private static final int DECODE_ERROR = -1;
@@ -90,8 +88,8 @@ import java.util.List;
     if (channelCount > 8) {
       throw new OpusDecoderException("Invalid channel count: " + channelCount);
     }
-    int preskip = readLittleEndian16(headerBytes, 10);
-    int gain = readLittleEndian16(headerBytes, 16);
+    int preskip = readUnsignedLittleEndian16(headerBytes, 10);
+    int gain = readSignedLittleEndian16(headerBytes, 16);
 
     byte[] streamMap = new byte[8];
     int numStreams;
@@ -148,7 +146,7 @@ import java.util.List;
 
   @Override
   protected SimpleOutputBuffer createOutputBuffer() {
-    return new SimpleOutputBuffer(this);
+    return new SimpleOutputBuffer(this::releaseOutputBuffer);
   }
 
   @Override
@@ -228,10 +226,14 @@ import java.util.List;
     return (int) (ns * SAMPLE_RATE / 1000000000);
   }
 
-  private static int readLittleEndian16(byte[] input, int offset) {
+  private static int readUnsignedLittleEndian16(byte[] input, int offset) {
     int value = input[offset] & 0xFF;
     value |= (input[offset + 1] & 0xFF) << 8;
     return value;
+  }
+
+  private static int readSignedLittleEndian16(byte[] input, int offset) {
+    return (short) readUnsignedLittleEndian16(input, offset);
   }
 
   private native long opusInit(int sampleRate, int channelCount, int numStreams, int numCoupled,
