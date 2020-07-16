@@ -37,13 +37,14 @@ import com.google.android.exoplayer2.util.Util;
 import com.google.android.exoplayer2.video.AvcConfig;
 import com.google.android.exoplayer2.video.DolbyVisionConfig;
 import com.google.android.exoplayer2.video.HevcConfig;
+import com.google.common.base.Function;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import org.checkerframework.checker.nullness.compatqual.NullableType;
 
-/** Utility methods for parsing MP4 format atom payloads according to ISO 14496-12. */
+/** Utility methods for parsing MP4 format atom payloads according to ISO/IEC 14496-12. */
 @SuppressWarnings({"ConstantField"})
 /* package */ final class AtomParsers {
 
@@ -83,7 +84,143 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   private static final byte[] opusMagic = Util.getUtf8Bytes("OpusHead");
 
   /**
-   * Parses a trak atom (defined in 14496-12).
+   * Parse the trak atoms in a moov atom (defined in ISO/IEC 14496-12).
+   *
+   * @param moov Moov atom to decode.
+   * @param gaplessInfoHolder Holder to populate with gapless playback information.
+   * @param duration The duration in units of the timescale declared in the mvhd atom, or {@link
+   *     C#TIME_UNSET} if the duration should be parsed from the tkhd atom.
+   * @param drmInitData {@link DrmInitData} to be included in the format, or {@code null}.
+   * @param ignoreEditLists Whether to ignore any edit lists in the trak boxes.
+   * @param isQuickTime True for QuickTime media. False otherwise.
+   * @param modifyTrackFunction A function to apply to the {@link Track Tracks} in the result.
+   * @return A list of {@link TrackSampleTable} instances.
+   * @throws ParserException Thrown if the trak atoms can't be parsed.
+   */
+  public static List<TrackSampleTable> parseTraks(
+      Atom.ContainerAtom moov,
+      GaplessInfoHolder gaplessInfoHolder,
+      long duration,
+      @Nullable DrmInitData drmInitData,
+      boolean ignoreEditLists,
+      boolean isQuickTime,
+      Function<Track, Track> modifyTrackFunction)
+      throws ParserException {
+    List<TrackSampleTable> trackSampleTables = new ArrayList<>();
+    for (int i = 0; i < moov.containerChildren.size(); i++) {
+      Atom.ContainerAtom atom = moov.containerChildren.get(i);
+      if (atom.type != Atom.TYPE_trak) {
+        continue;
+      }
+      @Nullable
+      Track track =
+          modifyTrackFunction.apply(
+              parseTrak(
+                  atom,
+                  moov.getLeafAtomOfType(Atom.TYPE_mvhd),
+                  duration,
+                  drmInitData,
+                  ignoreEditLists,
+                  isQuickTime));
+      if (track == null) {
+        continue;
+      }
+      Atom.ContainerAtom stblAtom =
+          atom.getContainerAtomOfType(Atom.TYPE_mdia)
+              .getContainerAtomOfType(Atom.TYPE_minf)
+              .getContainerAtomOfType(Atom.TYPE_stbl);
+      TrackSampleTable trackSampleTable = parseStbl(track, stblAtom, gaplessInfoHolder);
+      trackSampleTables.add(trackSampleTable);
+    }
+    return trackSampleTables;
+  }
+
+  /**
+   * Parses a udta atom.
+   *
+   * @param udtaAtom The udta (user data) atom to decode.
+   * @param isQuickTime True for QuickTime media. False otherwise.
+   * @return Parsed metadata, or null.
+   */
+  @Nullable
+  public static Metadata parseUdta(Atom.LeafAtom udtaAtom, boolean isQuickTime) {
+    if (isQuickTime) {
+      // Meta boxes are regular boxes rather than full boxes in QuickTime. For now, don't try and
+      // decode one.
+      return null;
+    }
+    ParsableByteArray udtaData = udtaAtom.data;
+    udtaData.setPosition(Atom.HEADER_SIZE);
+    while (udtaData.bytesLeft() >= Atom.HEADER_SIZE) {
+      int atomPosition = udtaData.getPosition();
+      int atomSize = udtaData.readInt();
+      int atomType = udtaData.readInt();
+      if (atomType == Atom.TYPE_meta) {
+        udtaData.setPosition(atomPosition);
+        return parseUdtaMeta(udtaData, atomPosition + atomSize);
+      }
+      udtaData.setPosition(atomPosition + atomSize);
+    }
+    return null;
+  }
+
+  /**
+   * Parses a metadata meta atom if it contains metadata with handler 'mdta'.
+   *
+   * @param meta The metadata atom to decode.
+   * @return Parsed metadata, or null.
+   */
+  @Nullable
+  public static Metadata parseMdtaFromMeta(Atom.ContainerAtom meta) {
+    @Nullable Atom.LeafAtom hdlrAtom = meta.getLeafAtomOfType(Atom.TYPE_hdlr);
+    @Nullable Atom.LeafAtom keysAtom = meta.getLeafAtomOfType(Atom.TYPE_keys);
+    @Nullable Atom.LeafAtom ilstAtom = meta.getLeafAtomOfType(Atom.TYPE_ilst);
+    if (hdlrAtom == null
+        || keysAtom == null
+        || ilstAtom == null
+        || parseHdlr(hdlrAtom.data) != TYPE_mdta) {
+      // There isn't enough information to parse the metadata, or the handler type is unexpected.
+      return null;
+    }
+
+    // Parse metadata keys.
+    ParsableByteArray keys = keysAtom.data;
+    keys.setPosition(Atom.FULL_HEADER_SIZE);
+    int entryCount = keys.readInt();
+    String[] keyNames = new String[entryCount];
+    for (int i = 0; i < entryCount; i++) {
+      int entrySize = keys.readInt();
+      keys.skipBytes(4); // keyNamespace
+      int keySize = entrySize - 8;
+      keyNames[i] = keys.readString(keySize);
+    }
+
+    // Parse metadata items.
+    ParsableByteArray ilst = ilstAtom.data;
+    ilst.setPosition(Atom.HEADER_SIZE);
+    ArrayList<Metadata.Entry> entries = new ArrayList<>();
+    while (ilst.bytesLeft() > Atom.HEADER_SIZE) {
+      int atomPosition = ilst.getPosition();
+      int atomSize = ilst.readInt();
+      int keyIndex = ilst.readInt() - 1;
+      if (keyIndex >= 0 && keyIndex < keyNames.length) {
+        String key = keyNames[keyIndex];
+        @Nullable
+        Metadata.Entry entry =
+            MetadataUtil.parseMdtaMetadataEntryFromIlst(ilst, atomPosition + atomSize, key);
+        if (entry != null) {
+          entries.add(entry);
+        }
+      } else {
+        Log.w(TAG, "Skipped metadata with unknown key index: " + keyIndex);
+      }
+      ilst.setPosition(atomPosition + atomSize);
+    }
+    return entries.isEmpty() ? null : new Metadata(entries);
+  }
+
+  /**
+   * Parses a trak atom (defined in ISO/IEC 14496-12).
    *
    * @param trak Atom to decode.
    * @param mvhd Movie header atom, used to get the timescale.
@@ -93,9 +230,10 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
    * @param ignoreEditLists Whether to ignore any edit lists in the trak box.
    * @param isQuickTime True for QuickTime media. False otherwise.
    * @return A {@link Track} instance, or {@code null} if the track's type isn't supported.
+   * @throws ParserException Thrown if the trak atom can't be parsed.
    */
   @Nullable
-  public static Track parseTrak(
+  private static Track parseTrak(
       Atom.ContainerAtom trak,
       Atom.LeafAtom mvhd,
       long duration,
@@ -145,7 +283,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   }
 
   /**
-   * Parses an stbl atom (defined in 14496-12).
+   * Parses an stbl atom (defined in ISO/IEC 14496-12).
    *
    * @param track Track to which this sample table corresponds.
    * @param stblAtom stbl (sample table) atom to decode.
@@ -153,7 +291,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
    * @return Sample table described by the stbl atom.
    * @throws ParserException Thrown if the stbl atom can't be parsed.
    */
-  public static TrackSampleTable parseStbl(
+  private static TrackSampleTable parseStbl(
       Track track, Atom.ContainerAtom stblAtom, GaplessInfoHolder gaplessInfoHolder)
       throws ParserException {
     SampleSizeBox sampleSizeBox;
@@ -177,7 +315,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
           /* maximumSize= */ 0,
           /* timestampsUs= */ new long[0],
           /* flags= */ new int[0],
-          /* durationUs= */ C.TIME_UNSET);
+          /* durationUs= */ 0);
     }
 
     // Entries are byte offsets of chunks.
@@ -246,7 +384,24 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     long timestampTimeUnits = 0;
     long duration;
 
-    if (!isFixedSampleSizeRawAudio) {
+    if (isFixedSampleSizeRawAudio) {
+      long[] chunkOffsetsBytes = new long[chunkIterator.length];
+      int[] chunkSampleCounts = new int[chunkIterator.length];
+      while (chunkIterator.moveNext()) {
+        chunkOffsetsBytes[chunkIterator.index] = chunkIterator.offset;
+        chunkSampleCounts[chunkIterator.index] = chunkIterator.numSamples;
+      }
+      int fixedSampleSize = Util.getPcmFrameSize(track.format.encoding, track.format.channelCount);
+      FixedSampleSizeRechunker.Results rechunkedResults =
+          FixedSampleSizeRechunker.rechunk(
+              fixedSampleSize, chunkOffsetsBytes, chunkSampleCounts, timestampDeltaInTimeUnits);
+      offsets = rechunkedResults.offsets;
+      sizes = rechunkedResults.sizes;
+      maximumSize = rechunkedResults.maximumSize;
+      timestamps = rechunkedResults.timestamps;
+      flags = rechunkedResults.flags;
+      duration = rechunkedResults.duration;
+    } else {
       offsets = new long[sampleCount];
       sizes = new int[sampleCount];
       timestamps = new long[sampleCount];
@@ -275,11 +430,11 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
         if (ctts != null) {
           while (remainingSamplesAtTimestampOffset == 0 && remainingTimestampOffsetChanges > 0) {
             remainingSamplesAtTimestampOffset = ctts.readUnsignedIntToInt();
-            // The BMFF spec (ISO 14496-12) states that sample offsets should be unsigned integers
-            // in version 0 ctts boxes, however some streams violate the spec and use signed
-            // integers instead. It's safe to always decode sample offsets as signed integers here,
-            // because unsigned integers will still be parsed correctly (unless their top bit is
-            // set, which is never true in practice because sample offsets are always small).
+            // The BMFF spec (ISO/IEC 14496-12) states that sample offsets should be unsigned
+            // integers in version 0 ctts boxes, however some streams violate the spec and use
+            // signed integers instead. It's safe to always decode sample offsets as signed integers
+            // here, because unsigned integers will still be parsed correctly (unless their top bit
+            // is set, which is never true in practice because sample offsets are always small).
             timestampOffset = ctts.readInt();
             remainingTimestampOffsetChanges--;
           }
@@ -308,7 +463,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
         remainingSamplesAtTimestampDelta--;
         if (remainingSamplesAtTimestampDelta == 0 && remainingTimestampDeltaChanges > 0) {
           remainingSamplesAtTimestampDelta = stts.readUnsignedIntToInt();
-          // The BMFF spec (ISO 14496-12) states that sample deltas should be unsigned integers
+          // The BMFF spec (ISO/IEC 14496-12) states that sample deltas should be unsigned integers
           // in stts boxes, however some streams violate the spec and use signed integers instead.
           // See https://github.com/google/ExoPlayer/issues/3384. It's safe to always decode sample
           // deltas as signed integers here, because unsigned integers will still be parsed
@@ -356,23 +511,6 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
                 + remainingSamplesAtTimestampOffset
                 + (!isCttsValid ? ", ctts invalid" : ""));
       }
-    } else {
-      long[] chunkOffsetsBytes = new long[chunkIterator.length];
-      int[] chunkSampleCounts = new int[chunkIterator.length];
-      while (chunkIterator.moveNext()) {
-        chunkOffsetsBytes[chunkIterator.index] = chunkIterator.offset;
-        chunkSampleCounts[chunkIterator.index] = chunkIterator.numSamples;
-      }
-      int fixedSampleSize =
-          Util.getPcmFrameSize(track.format.pcmEncoding, track.format.channelCount);
-      FixedSampleSizeRechunker.Results rechunkedResults = FixedSampleSizeRechunker.rechunk(
-          fixedSampleSize, chunkOffsetsBytes, chunkSampleCounts, timestampDeltaInTimeUnits);
-      offsets = rechunkedResults.offsets;
-      sizes = rechunkedResults.sizes;
-      maximumSize = rechunkedResults.maximumSize;
-      timestamps = rechunkedResults.timestamps;
-      flags = rechunkedResults.flags;
-      duration = rechunkedResults.duration;
     }
     long durationUs = Util.scaleLargeTimestamp(duration, C.MICROS_PER_SECOND, track.timescale);
 
@@ -382,12 +520,12 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
           track, offsets, sizes, maximumSize, timestamps, flags, durationUs);
     }
 
-    // See the BMFF spec (ISO 14496-12) subsection 8.6.6. Edit lists that require prerolling from a
-    // sync sample after reordering are not supported. Partial audio sample truncation is only
-    // supported in edit lists with one edit that removes less than MAX_GAPLESS_TRIM_SIZE_SAMPLES
-    // samples from the start/end of the track. This implementation handles simple
-    // discarding/delaying of samples. The extractor may place further restrictions on what edited
-    // streams are playable.
+    // See the BMFF spec (ISO/IEC 14496-12) subsection 8.6.6. Edit lists that require prerolling
+    // from a sync sample after reordering are not supported. Partial audio sample truncation is
+    // only supported in edit lists with one edit that removes less than
+    // MAX_GAPLESS_TRIM_SIZE_SAMPLES samples from the start/end of the track. This implementation
+    // handles simple discarding/delaying of samples. The extractor may place further restrictions
+    // on what edited streams are playable.
 
     if (track.editListDurations.length == 1
         && track.type == C.TRACK_TYPE_AUDIO
@@ -513,90 +651,6 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
         editedDurationUs);
   }
 
-  /**
-   * Parses a udta atom.
-   *
-   * @param udtaAtom The udta (user data) atom to decode.
-   * @param isQuickTime True for QuickTime media. False otherwise.
-   * @return Parsed metadata, or null.
-   */
-  @Nullable
-  public static Metadata parseUdta(Atom.LeafAtom udtaAtom, boolean isQuickTime) {
-    if (isQuickTime) {
-      // Meta boxes are regular boxes rather than full boxes in QuickTime. For now, don't try and
-      // decode one.
-      return null;
-    }
-    ParsableByteArray udtaData = udtaAtom.data;
-    udtaData.setPosition(Atom.HEADER_SIZE);
-    while (udtaData.bytesLeft() >= Atom.HEADER_SIZE) {
-      int atomPosition = udtaData.getPosition();
-      int atomSize = udtaData.readInt();
-      int atomType = udtaData.readInt();
-      if (atomType == Atom.TYPE_meta) {
-        udtaData.setPosition(atomPosition);
-        return parseUdtaMeta(udtaData, atomPosition + atomSize);
-      }
-      udtaData.setPosition(atomPosition + atomSize);
-    }
-    return null;
-  }
-
-  /**
-   * Parses a metadata meta atom if it contains metadata with handler 'mdta'.
-   *
-   * @param meta The metadata atom to decode.
-   * @return Parsed metadata, or null.
-   */
-  @Nullable
-  public static Metadata parseMdtaFromMeta(Atom.ContainerAtom meta) {
-    @Nullable Atom.LeafAtom hdlrAtom = meta.getLeafAtomOfType(Atom.TYPE_hdlr);
-    @Nullable Atom.LeafAtom keysAtom = meta.getLeafAtomOfType(Atom.TYPE_keys);
-    @Nullable Atom.LeafAtom ilstAtom = meta.getLeafAtomOfType(Atom.TYPE_ilst);
-    if (hdlrAtom == null
-        || keysAtom == null
-        || ilstAtom == null
-        || AtomParsers.parseHdlr(hdlrAtom.data) != TYPE_mdta) {
-      // There isn't enough information to parse the metadata, or the handler type is unexpected.
-      return null;
-    }
-
-    // Parse metadata keys.
-    ParsableByteArray keys = keysAtom.data;
-    keys.setPosition(Atom.FULL_HEADER_SIZE);
-    int entryCount = keys.readInt();
-    String[] keyNames = new String[entryCount];
-    for (int i = 0; i < entryCount; i++) {
-      int entrySize = keys.readInt();
-      keys.skipBytes(4); // keyNamespace
-      int keySize = entrySize - 8;
-      keyNames[i] = keys.readString(keySize);
-    }
-
-    // Parse metadata items.
-    ParsableByteArray ilst = ilstAtom.data;
-    ilst.setPosition(Atom.HEADER_SIZE);
-    ArrayList<Metadata.Entry> entries = new ArrayList<>();
-    while (ilst.bytesLeft() > Atom.HEADER_SIZE) {
-      int atomPosition = ilst.getPosition();
-      int atomSize = ilst.readInt();
-      int keyIndex = ilst.readInt() - 1;
-      if (keyIndex >= 0 && keyIndex < keyNames.length) {
-        String key = keyNames[keyIndex];
-        @Nullable
-        Metadata.Entry entry =
-            MetadataUtil.parseMdtaMetadataEntryFromIlst(ilst, atomPosition + atomSize, key);
-        if (entry != null) {
-          entries.add(entry);
-        }
-      } else {
-        Log.w(TAG, "Skipped metadata with unknown key index: " + keyIndex);
-      }
-      ilst.setPosition(atomPosition + atomSize);
-    }
-    return entries.isEmpty() ? null : new Metadata(entries);
-  }
-
   @Nullable
   private static Metadata parseUdtaMeta(ParsableByteArray meta, int limit) {
     meta.skipBytes(Atom.FULL_HEADER_SIZE);
@@ -627,7 +681,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   }
 
   /**
-   * Parses a mvhd atom (defined in 14496-12), returning the timescale for the movie.
+   * Parses a mvhd atom (defined in ISO/IEC 14496-12), returning the timescale for the movie.
    *
    * @param mvhd Contents of the mvhd atom to be parsed.
    * @return Timescale for the movie.
@@ -641,7 +695,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   }
 
   /**
-   * Parses a tkhd atom (defined in 14496-12).
+   * Parses a tkhd atom (defined in ISO/IEC 14496-12).
    *
    * @return An object containing the parsed data.
    */
@@ -726,11 +780,11 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   }
 
   /**
-   * Parses an mdhd atom (defined in 14496-12).
+   * Parses an mdhd atom (defined in ISO/IEC 14496-12).
    *
    * @param mdhd The mdhd atom to decode.
    * @return A pair consisting of the media timescale defined as the number of time units that pass
-   * in one second, and the language code.
+   *     in one second, and the language code.
    */
   private static Pair<Long, String> parseMdhd(ParsableByteArray mdhd) {
     mdhd.setPosition(Atom.HEADER_SIZE);
@@ -749,7 +803,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   }
 
   /**
-   * Parses a stsd atom (defined in 14496-12).
+   * Parses a stsd atom (defined in ISO/IEC 14496-12).
    *
    * @param stsd The stsd atom to decode.
    * @param trackId The track's identifier in its container.
@@ -1025,7 +1079,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   }
 
   /**
-   * Parses the edts atom (defined in 14496-12 subsection 8.6.5).
+   * Parses the edts atom (defined in ISO/IEC 14496-12 subsection 8.6.5).
    *
    * @param edtsAtom edts (edit box) atom to decode.
    * @return Pair of edit list durations and edit list media times, or {@code null} if they are not
@@ -1255,7 +1309,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
               .setCodecs(codecs)
               .setChannelCount(channelCount)
               .setSampleRate(sampleRate)
-              .setPcmEncoding(pcmEncoding)
+              .setEncoding(pcmEncoding)
               .setInitializationData(
                   initializationData == null ? null : Collections.singletonList(initializationData))
               .setDrmInitData(drmInitData)
@@ -1287,7 +1341,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   private static Pair<@NullableType String, byte @NullableType []> parseEsdsFromParent(
       ParsableByteArray parent, int position) {
     parent.setPosition(position + Atom.HEADER_SIZE + 4);
-    // Start of the ES_Descriptor (defined in 14496-1)
+    // Start of the ES_Descriptor (defined in ISO/IEC 14496-1)
     parent.skipBytes(1); // ES_Descriptor tag
     parseExpandableClassSize(parent);
     parent.skipBytes(2); // ES_ID
@@ -1303,11 +1357,11 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
       parent.skipBytes(2);
     }
 
-    // Start of the DecoderConfigDescriptor (defined in 14496-1)
+    // Start of the DecoderConfigDescriptor (defined in ISO/IEC 14496-1)
     parent.skipBytes(1); // DecoderConfigDescriptor tag
     parseExpandableClassSize(parent);
 
-    // Set the MIME type based on the object type indication (14496-1 table 5).
+    // Set the MIME type based on the object type indication (ISO/IEC 14496-1 table 5).
     int objectTypeIndication = parent.readUnsignedByte();
     String mimeType = getMimeTypeFromMp4ObjectType(objectTypeIndication);
     if (MimeTypes.AUDIO_MPEG.equals(mimeType)
@@ -1448,9 +1502,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
     return null;
   }
 
-  /**
-   * Parses the size of an expandable class, as specified by ISO 14496-1 subsection 8.3.3.
-   */
+  /** Parses the size of an expandable class, as specified by ISO/IEC 14496-1 subsection 8.3.3. */
   private static int parseExpandableClassSize(ParsableByteArray data) {
     int currentByte = data.readUnsignedByte();
     int size = currentByte & 0x7F;

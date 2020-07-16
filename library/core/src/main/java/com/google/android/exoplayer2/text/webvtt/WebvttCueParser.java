@@ -391,13 +391,7 @@ public final class WebvttCueParser {
       builder.line = WebvttParserUtil.parsePercentage(s);
       builder.lineType = Cue.LINE_TYPE_FRACTION;
     } else {
-      int lineNumber = Integer.parseInt(s);
-      if (lineNumber < 0) {
-        // WebVTT defines line -1 as last visible row when lineAnchor is ANCHOR_TYPE_START, where-as
-        // Cue defines it to be the first row that's not visible.
-        lineNumber--;
-      }
-      builder.line = lineNumber;
+      builder.line = Integer.parseInt(s);
       builder.lineType = Cue.LINE_TYPE_NUMBER;
     }
   }
@@ -682,6 +676,14 @@ public final class WebvttCueParser {
       addOrReplaceSpan(
           spannedText,
           new ForegroundColorSpan(style.getFontColor()),
+          start,
+          end,
+          Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    }
+    if (style.hasBackgroundColor()) {
+      addOrReplaceSpan(
+          spannedText,
+          new BackgroundColorSpan(style.getBackgroundColor()),
           start,
           end,
           Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);

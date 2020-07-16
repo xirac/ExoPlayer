@@ -415,7 +415,7 @@ public class DefaultDashChunkSource implements DashChunkSource {
 
   @Override
   public boolean onChunkLoadError(
-      Chunk chunk, boolean cancelable, Exception e, long blacklistDurationMs) {
+      Chunk chunk, boolean cancelable, Exception e, long exclusionDurationMs) {
     if (!cancelable) {
       return false;
     }
@@ -438,8 +438,8 @@ public class DefaultDashChunkSource implements DashChunkSource {
         }
       }
     }
-    return blacklistDurationMs != C.TIME_UNSET
-        && trackSelection.blacklist(trackSelection.indexOf(chunk.trackFormat), blacklistDurationMs);
+    return exclusionDurationMs != C.TIME_UNSET
+        && trackSelection.blacklist(trackSelection.indexOf(chunk.trackFormat), exclusionDurationMs);
   }
 
   // Internal methods.
@@ -789,7 +789,7 @@ public class DefaultDashChunkSource implements DashChunkSource {
           // All other text types are raw formats that do not need an extractor.
           return null;
         }
-      } else if (MimeTypes.isWebm(containerMimeType)) {
+      } else if (MimeTypes.isMatroska(containerMimeType)) {
         extractor = new MatroskaExtractor(MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES);
       } else {
         int flags = 0;

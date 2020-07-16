@@ -37,8 +37,7 @@ public final class FakeTimeline extends Timeline {
     public static final long DEFAULT_WINDOW_DURATION_US = 10 * C.MICROS_PER_SECOND;
 
     /** Default offset of a window in its first period in microseconds. */
-    public static final long DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US =
-        10_000 * C.MICROS_PER_SECOND;
+    public static final long DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US = 123 * C.MICROS_PER_SECOND;
 
     public final int periodCount;
     public final Object id;
@@ -53,8 +52,7 @@ public final class FakeTimeline extends Timeline {
     public final AdPlaybackState adPlaybackState;
 
     /**
-     * Creates a window definition that corresponds to a dummy placeholder timeline using the given
-     * tag.
+     * Creates a window definition that corresponds to a placeholder timeline using the given tag.
      *
      * @param tag The tag to use in the timeline.
      */
@@ -184,9 +182,10 @@ public final class FakeTimeline extends Timeline {
   }
 
   /** The fake media item used by the fake timeline. */
-  public static final MediaItem FAKE_MEDIA_ITEM = new MediaItem.Builder().setUri(Uri.EMPTY).build();
+  public static final MediaItem FAKE_MEDIA_ITEM =
+      new MediaItem.Builder().setMediaId("FakeTimeline").setUri(Uri.EMPTY).build();
 
-  private static final long AD_DURATION_US = 10 * C.MICROS_PER_SECOND;
+  private static final long AD_DURATION_US = 5 * C.MICROS_PER_SECOND;
 
   private final TimelineWindowDefinition[] windowDefinitions;
   private final Object[] manifests;

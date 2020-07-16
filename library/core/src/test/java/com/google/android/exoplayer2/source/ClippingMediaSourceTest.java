@@ -27,11 +27,11 @@ import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.Timeline.Period;
 import com.google.android.exoplayer2.Timeline.Window;
+import com.google.android.exoplayer2.drm.DrmSessionEventListener;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
 import com.google.android.exoplayer2.source.ClippingMediaSource.IllegalClippingException;
-import com.google.android.exoplayer2.source.MaskingMediaSource.DummyTimeline;
+import com.google.android.exoplayer2.source.MaskingMediaSource.PlaceholderTimeline;
 import com.google.android.exoplayer2.source.MediaSource.MediaPeriodId;
-import com.google.android.exoplayer2.source.MediaSourceEventListener.EventDispatcher;
 import com.google.android.exoplayer2.testutil.FakeMediaPeriod;
 import com.google.android.exoplayer2.testutil.FakeMediaSource;
 import com.google.android.exoplayer2.testutil.FakeTimeline;
@@ -173,7 +173,7 @@ public final class ClippingMediaSourceTest {
     // Timeline that's dynamic and not seekable. A child source might report such a timeline prior
     // to it having loaded sufficient data to establish its duration and seekability. Such timelines
     // should not result in clipping failure.
-    Timeline timeline = new DummyTimeline(MediaItem.fromUri(Uri.EMPTY));
+    Timeline timeline = new PlaceholderTimeline(MediaItem.fromUri(Uri.EMPTY));
 
     Timeline clippedTimeline =
         getClippedTimeline(
@@ -569,10 +569,11 @@ public final class ClippingMediaSourceTest {
               MediaPeriodId id,
               TrackGroupArray trackGroupArray,
               Allocator allocator,
+              MediaSourceEventListener.EventDispatcher mediaSourceEventDispatcher,
               DrmSessionManager drmSessionManager,
-              EventDispatcher eventDispatcher,
+              DrmSessionEventListener.EventDispatcher drmEventDispatcher,
               @Nullable TransferListener transferListener) {
-            eventDispatcher.downstreamFormatChanged(
+            mediaSourceEventDispatcher.downstreamFormatChanged(
                 new MediaLoadData(
                     C.DATA_TYPE_MEDIA,
                     C.TRACK_TYPE_UNKNOWN,
@@ -585,8 +586,9 @@ public final class ClippingMediaSourceTest {
                 id,
                 trackGroupArray,
                 allocator,
+                mediaSourceEventDispatcher,
                 drmSessionManager,
-                eventDispatcher,
+                drmEventDispatcher,
                 transferListener);
           }
         };
@@ -599,7 +601,7 @@ public final class ClippingMediaSourceTest {
       testRunner.runOnPlaybackThread(
           () ->
               clippingMediaSource.addEventListener(
-                  Util.createHandler(),
+                  Util.createHandlerForCurrentLooper(),
                   new MediaSourceEventListener() {
                     @Override
                     public void onDownstreamFormatChanged(

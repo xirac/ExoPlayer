@@ -27,6 +27,7 @@ import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
 import com.google.android.exoplayer2.drm.DrmInitData;
 import com.google.android.exoplayer2.drm.DrmSession;
+import com.google.android.exoplayer2.drm.DrmSessionEventListener;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
 import com.google.android.exoplayer2.extractor.DummyTrackOutput;
 import com.google.android.exoplayer2.extractor.Extractor;
@@ -39,7 +40,7 @@ import com.google.android.exoplayer2.metadata.emsg.EventMessageDecoder;
 import com.google.android.exoplayer2.metadata.id3.PrivFrame;
 import com.google.android.exoplayer2.source.LoadEventInfo;
 import com.google.android.exoplayer2.source.MediaLoadData;
-import com.google.android.exoplayer2.source.MediaSourceEventListener.EventDispatcher;
+import com.google.android.exoplayer2.source.MediaSourceEventListener;
 import com.google.android.exoplayer2.source.SampleQueue;
 import com.google.android.exoplayer2.source.SampleQueue.UpstreamFormatChangedListener;
 import com.google.android.exoplayer2.source.SampleStream;
@@ -57,10 +58,10 @@ import com.google.android.exoplayer2.upstream.Loader;
 import com.google.android.exoplayer2.upstream.Loader.LoadErrorAction;
 import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.Log;
-import com.google.android.exoplayer2.util.MediaSourceEventDispatcher;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.ParsableByteArray;
 import com.google.android.exoplayer2.util.Util;
+import com.google.common.collect.ImmutableList;
 import java.io.EOFException;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -119,9 +120,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private final Allocator allocator;
   @Nullable private final Format muxedAudioFormat;
   private final DrmSessionManager drmSessionManager;
+  private final DrmSessionEventListener.EventDispatcher drmEventDispatcher;
   private final LoadErrorHandlingPolicy loadErrorHandlingPolicy;
   private final Loader loader;
-  private final EventDispatcher eventDispatcher;
+  private final MediaSourceEventListener.EventDispatcher mediaSourceEventDispatcher;
   private final @HlsMediaSource.MetadataType int metadataType;
   private final HlsChunkSource.HlsChunkHolder nextChunkHolder;
   private final ArrayList<HlsMediaChunk> mediaChunks;
@@ -184,8 +186,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
    * @param muxedAudioFormat Optional muxed audio {@link Format} as defined by the master playlist.
    * @param drmSessionManager The {@link DrmSessionManager} to acquire {@link DrmSession
    *     DrmSessions} with.
+   * @param drmEventDispatcher A dispatcher to notify of {@link DrmSessionEventListener} events.
    * @param loadErrorHandlingPolicy A {@link LoadErrorHandlingPolicy}.
-   * @param eventDispatcher A dispatcher to notify of events.
+   * @param mediaSourceEventDispatcher A dispatcher to notify of {@link MediaSourceEventListener}
+   *     events.
    */
   public HlsSampleStreamWrapper(
       int trackType,
@@ -196,8 +200,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       long positionUs,
       @Nullable Format muxedAudioFormat,
       DrmSessionManager drmSessionManager,
+      DrmSessionEventListener.EventDispatcher drmEventDispatcher,
       LoadErrorHandlingPolicy loadErrorHandlingPolicy,
-      EventDispatcher eventDispatcher,
+      MediaSourceEventListener.EventDispatcher mediaSourceEventDispatcher,
       @HlsMediaSource.MetadataType int metadataType) {
     this.trackType = trackType;
     this.callback = callback;
@@ -206,8 +211,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     this.allocator = allocator;
     this.muxedAudioFormat = muxedAudioFormat;
     this.drmSessionManager = drmSessionManager;
+    this.drmEventDispatcher = drmEventDispatcher;
     this.loadErrorHandlingPolicy = loadErrorHandlingPolicy;
-    this.eventDispatcher = eventDispatcher;
+    this.mediaSourceEventDispatcher = mediaSourceEventDispatcher;
     this.metadataType = metadataType;
     loader = new Loader("Loader:HlsSampleStreamWrapper");
     nextChunkHolder = new HlsChunkSource.HlsChunkHolder();
@@ -227,7 +233,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     @SuppressWarnings("nullness:methodref.receiver.bound.invalid")
     Runnable onTracksEndedRunnable = this::onTracksEnded;
     this.onTracksEndedRunnable = onTracksEndedRunnable;
-    handler = Util.createHandler();
+    handler = Util.createHandlerForCurrentLooper();
     lastSeekPositionUs = positionUs;
     pendingResetPositionUs = positionUs;
   }
@@ -514,8 +520,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     chunkSource.setIsTimestampMaster(isTimestampMaster);
   }
 
-  public boolean onPlaylistError(Uri playlistUrl, long blacklistDurationMs) {
-    return chunkSource.onPlaylistError(playlistUrl, blacklistDurationMs);
+  public boolean onPlaylistError(Uri playlistUrl, long exclusionDurationMs) {
+    return chunkSource.onPlaylistError(playlistUrl, exclusionDurationMs);
   }
 
   // SampleStream implementation.
@@ -551,16 +557,18 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       HlsMediaChunk currentChunk = mediaChunks.get(0);
       Format trackFormat = currentChunk.trackFormat;
       if (!trackFormat.equals(downstreamTrackFormat)) {
-        eventDispatcher.downstreamFormatChanged(trackType, trackFormat,
-            currentChunk.trackSelectionReason, currentChunk.trackSelectionData,
+        mediaSourceEventDispatcher.downstreamFormatChanged(
+            trackType,
+            trackFormat,
+            currentChunk.trackSelectionReason,
+            currentChunk.trackSelectionData,
             currentChunk.startTimeUs);
       }
       downstreamTrackFormat = trackFormat;
     }
 
     int result =
-        sampleQueues[sampleQueueIndex].read(
-            formatHolder, buffer, requireFormat, loadingFinished, lastSeekPositionUs);
+        sampleQueues[sampleQueueIndex].read(formatHolder, buffer, requireFormat, loadingFinished);
     if (result == C.RESULT_FORMAT_READ) {
       Format format = Assertions.checkNotNull(formatHolder.format);
       if (sampleQueueIndex == primarySampleQueueIndex) {
@@ -587,11 +595,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
 
     SampleQueue sampleQueue = sampleQueues[sampleQueueIndex];
-    if (loadingFinished && positionUs > sampleQueue.getLargestQueuedTimestampUs()) {
-      return sampleQueue.advanceToEnd();
-    } else {
-      return sampleQueue.advanceTo(positionUs);
-    }
+    int skipCount = sampleQueue.getSkipCount(positionUs, loadingFinished);
+    sampleQueue.skip(skipCount);
+    return skipCount;
   }
 
   // SequenceableLoader implementation
@@ -640,6 +646,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     if (isPendingReset()) {
       chunkQueue = Collections.emptyList();
       loadPositionUs = pendingResetPositionUs;
+      for (SampleQueue sampleQueue : sampleQueues) {
+        sampleQueue.setStartTimeUs(pendingResetPositionUs);
+      }
     } else {
       chunkQueue = readOnlyMediaChunks;
       HlsMediaChunk lastMediaChunk = getLastMediaChunk();
@@ -679,7 +688,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     long elapsedRealtimeMs =
         loader.startLoading(
             loadable, this, loadErrorHandlingPolicy.getMinimumLoadableRetryCount(loadable.type));
-    eventDispatcher.loadStarted(
+    mediaSourceEventDispatcher.loadStarted(
         new LoadEventInfo(loadable.loadTaskId, loadable.dataSpec, elapsedRealtimeMs),
         loadable.type,
         trackType,
@@ -732,7 +741,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             loadDurationMs,
             loadable.bytesLoaded());
     loadErrorHandlingPolicy.onLoadTaskConcluded(loadable.loadTaskId);
-    eventDispatcher.loadCompleted(
+    mediaSourceEventDispatcher.loadCompleted(
         loadEventInfo,
         loadable.type,
         trackType,
@@ -762,7 +771,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             loadDurationMs,
             loadable.bytesLoaded());
     loadErrorHandlingPolicy.onLoadTaskConcluded(loadable.loadTaskId);
-    eventDispatcher.loadCanceled(
+    mediaSourceEventDispatcher.loadCanceled(
         loadEventInfo,
         loadable.type,
         trackType,
@@ -790,7 +799,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       int errorCount) {
     long bytesLoaded = loadable.bytesLoaded();
     boolean isMediaChunk = isMediaChunk(loadable);
-    boolean blacklistSucceeded = false;
+    boolean exclusionSucceeded = false;
     LoadEventInfo loadEventInfo =
         new LoadEventInfo(
             loadable.loadTaskId,
@@ -812,12 +821,12 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     LoadErrorInfo loadErrorInfo =
         new LoadErrorInfo(loadEventInfo, mediaLoadData, error, errorCount);
     LoadErrorAction loadErrorAction;
-    long blacklistDurationMs = loadErrorHandlingPolicy.getBlacklistDurationMsFor(loadErrorInfo);
-    if (blacklistDurationMs != C.TIME_UNSET) {
-      blacklistSucceeded = chunkSource.maybeBlacklistTrack(loadable, blacklistDurationMs);
+    long exclusionDurationMs = loadErrorHandlingPolicy.getBlacklistDurationMsFor(loadErrorInfo);
+    if (exclusionDurationMs != C.TIME_UNSET) {
+      exclusionSucceeded = chunkSource.maybeExcludeTrack(loadable, exclusionDurationMs);
     }
 
-    if (blacklistSucceeded) {
+    if (exclusionSucceeded) {
       if (isMediaChunk && bytesLoaded == 0) {
         HlsMediaChunk removed = mediaChunks.remove(mediaChunks.size() - 1);
         Assertions.checkState(removed == loadable);
@@ -826,7 +835,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         }
       }
       loadErrorAction = Loader.DONT_RETRY;
-    } else /* did not blacklist */ {
+    } else /* did not exclude */ {
       long retryDelayMs = loadErrorHandlingPolicy.getRetryDelayMsFor(loadErrorInfo);
       loadErrorAction =
           retryDelayMs != C.TIME_UNSET
@@ -835,7 +844,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
 
     boolean wasCanceled = !loadErrorAction.isRetry();
-    eventDispatcher.loadError(
+    mediaSourceEventDispatcher.loadError(
         loadEventInfo,
         loadable.type,
         trackType,
@@ -851,7 +860,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       loadErrorHandlingPolicy.onLoadTaskConcluded(loadable.loadTaskId);
     }
 
-    if (blacklistSucceeded) {
+    if (exclusionSucceeded) {
       if (!prepared) {
         continueLoading(lastSeekPositionUs);
       } else {
@@ -873,9 +882,16 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     upstreamTrackFormat = chunk.trackFormat;
     pendingResetPositionUs = C.TIME_UNSET;
     mediaChunks.add(chunk);
-    chunk.init(/* output= */ this, sampleQueues);
+    ImmutableList.Builder<Integer> sampleQueueWriteIndicesBuilder = ImmutableList.builder();
+    for (SampleQueue sampleQueue : sampleQueues) {
+      sampleQueueWriteIndicesBuilder.add(sampleQueue.getWriteIndex());
+    }
+    chunk.init(/* output= */ this, sampleQueueWriteIndicesBuilder.build());
     for (HlsSampleQueue sampleQueue : sampleQueues) {
       sampleQueue.setSourceChunk(chunk);
+      if (chunk.shouldSpliceIn) {
+        sampleQueue.splice();
+      }
     }
   }
 
@@ -884,7 +900,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
     int newQueueSize = C.LENGTH_UNSET;
     for (int i = preferredQueueSize; i < mediaChunks.size(); i++) {
-      if (!haveReadFromMediaChunkDiscardRange(i)) {
+      if (canDiscardUpstreamMediaChunksFromIndex(i)) {
         newQueueSize = i;
         break;
       }
@@ -900,7 +916,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
     loadingFinished = false;
 
-    eventDispatcher.upstreamDiscarded(
+    mediaSourceEventDispatcher.upstreamDiscarded(
         primarySampleQueueType, firstRemovedChunk.startTimeUs, endTimeUs);
   }
 
@@ -923,7 +939,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
     if (trackOutput == null) {
       if (tracksEnded) {
-        return createDummyTrackOutput(id, type);
+        return createFakeTrackOutput(id, type);
       } else {
         // The relevant SampleQueue hasn't been constructed yet - so construct it.
         trackOutput = createSampleQueue(id, type);
@@ -967,7 +983,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
     return sampleQueueTrackIds[sampleQueueIndex] == id
         ? sampleQueues[sampleQueueIndex]
-        : createDummyTrackOutput(id, type);
+        : createFakeTrackOutput(id, type);
   }
 
   private SampleQueue createSampleQueue(int id, int type) {
@@ -979,7 +995,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             allocator,
             /* playbackLooper= */ handler.getLooper(),
             drmSessionManager,
-            eventDispatcher,
+            drmEventDispatcher,
             overridingDrmInitData);
     if (isAudioVideo) {
       sampleQueue.setDrmInitData(drmInitData);
@@ -1102,23 +1118,32 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     return true;
   }
 
-  private boolean haveReadFromMediaChunkDiscardRange(int mediaChunkIndex) {
-    HlsMediaChunk mediaChunk = mediaChunks.get(mediaChunkIndex);
-    for (SampleQueue sampleQueue : sampleQueues) {
-      int discardFromIndex = mediaChunk.getSampleQueueDiscardFromIndex(sampleQueue);
-      if (sampleQueue.getReadIndex() > discardFromIndex) {
-        return true;
+  private boolean canDiscardUpstreamMediaChunksFromIndex(int mediaChunkIndex) {
+    for (int i = mediaChunkIndex; i < mediaChunks.size(); i++) {
+      if (mediaChunks.get(i).shouldSpliceIn) {
+        // Discarding not possible because a spliced-in chunk potentially removed sample metadata
+        // from the previous chunks.
+        // TODO: Keep sample metadata to allow restoring these chunks [internal b/159904763].
+        return false;
       }
     }
-    return false;
+    HlsMediaChunk mediaChunk = mediaChunks.get(mediaChunkIndex);
+    for (int i = 0; i < sampleQueues.length; i++) {
+      int discardFromIndex = mediaChunk.getFirstSampleIndex(/* sampleQueueIndex= */ i);
+      if (sampleQueues[i].getReadIndex() > discardFromIndex) {
+        // Discarding not possible because we already read from the chunk.
+        return false;
+      }
+    }
+    return true;
   }
 
   private HlsMediaChunk discardUpstreamMediaChunksFromIndex(int chunkIndex) {
     HlsMediaChunk firstRemovedChunk = mediaChunks.get(chunkIndex);
     Util.removeRange(mediaChunks, /* fromIndex= */ chunkIndex, /* toIndex= */ mediaChunks.size());
-    for (SampleQueue sampleQueue : sampleQueues) {
-      int discardFromIndex = firstRemovedChunk.getSampleQueueDiscardFromIndex(sampleQueue);
-      sampleQueue.discardUpstreamSamples(discardFromIndex);
+    for (int i = 0; i < sampleQueues.length; i++) {
+      int discardFromIndex = firstRemovedChunk.getFirstSampleIndex(/* sampleQueueIndex= */ i);
+      sampleQueues[i].discardUpstreamSamples(discardFromIndex);
     }
     return firstRemovedChunk;
   }
@@ -1432,7 +1457,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     return true;
   }
 
-  private static DummyTrackOutput createDummyTrackOutput(int id, int type) {
+  private static DummyTrackOutput createFakeTrackOutput(int id, int type) {
     Log.w(TAG, "Unmapped track with id " + id + " of type " + type);
     return new DummyTrackOutput();
   }
@@ -1477,7 +1502,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         Allocator allocator,
         Looper playbackLooper,
         DrmSessionManager drmSessionManager,
-        MediaSourceEventDispatcher eventDispatcher,
+        DrmSessionEventListener.EventDispatcher eventDispatcher,
         Map<String, DrmInitData> overridingDrmInitData) {
       super(allocator, playbackLooper, drmSessionManager, eventDispatcher);
       this.overridingDrmInitData = overridingDrmInitData;

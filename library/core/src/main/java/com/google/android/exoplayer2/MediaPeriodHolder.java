@@ -297,7 +297,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
             positionUs);
     associateNoSampleRenderersWithEmptySampleStream(sampleStreams);
 
-    // Update whether we have enabled tracks and sanity check the expected streams are non-null.
+    // Update whether we have enabled tracks and check that the expected streams are non-null.
     hasEnabledTracks = false;
     for (int i = 0; i < sampleStreams.length; i++) {
       if (sampleStreams[i] != null) {
@@ -380,7 +380,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
   }
 
   /**
-   * For each renderer of type {@link C#TRACK_TYPE_NONE}, we will remove the dummy {@link
+   * For each renderer of type {@link C#TRACK_TYPE_NONE}, we will remove the {@link
    * EmptySampleStream} that was associated with it.
    */
   private void disassociateNoSampleRenderersWithEmptySampleStream(
@@ -394,7 +394,7 @@ import org.checkerframework.checker.nullness.compatqual.NullableType;
 
   /**
    * For each renderer of type {@link C#TRACK_TYPE_NONE} that was enabled, we will associate it with
-   * a dummy {@link EmptySampleStream}.
+   * an {@link EmptySampleStream}.
    */
   private void associateNoSampleRenderersWithEmptySampleStream(
       @NullableType SampleStream[] sampleStreams) {

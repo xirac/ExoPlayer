@@ -42,8 +42,11 @@ import com.google.ads.interactivemedia.v3.api.AdsManager;
 import com.google.ads.interactivemedia.v3.api.AdsManagerLoadedEvent;
 import com.google.ads.interactivemedia.v3.api.AdsRenderingSettings;
 import com.google.ads.interactivemedia.v3.api.AdsRequest;
+import com.google.ads.interactivemedia.v3.api.FriendlyObstruction;
 import com.google.ads.interactivemedia.v3.api.ImaSdkSettings;
 import com.google.ads.interactivemedia.v3.api.player.AdMediaInfo;
+import com.google.ads.interactivemedia.v3.api.player.ContentProgressProvider;
+import com.google.ads.interactivemedia.v3.api.player.VideoAdPlayer;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.MediaItem;
@@ -51,7 +54,7 @@ import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.Timeline;
 import com.google.android.exoplayer2.Timeline.Period;
 import com.google.android.exoplayer2.ext.ima.ImaAdsLoader.ImaFactory;
-import com.google.android.exoplayer2.source.MaskingMediaSource.DummyTimeline;
+import com.google.android.exoplayer2.source.MaskingMediaSource.PlaceholderTimeline;
 import com.google.android.exoplayer2.source.ads.AdPlaybackState;
 import com.google.android.exoplayer2.source.ads.AdsLoader;
 import com.google.android.exoplayer2.source.ads.AdsMediaSource.AdLoadException;
@@ -59,6 +62,7 @@ import com.google.android.exoplayer2.source.ads.SinglePeriodAdTimeline;
 import com.google.android.exoplayer2.testutil.FakeTimeline;
 import com.google.android.exoplayer2.testutil.FakeTimeline.TimelineWindowDefinition;
 import com.google.android.exoplayer2.upstream.DataSpec;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import java.io.IOException;
 import java.time.Duration;
@@ -94,7 +98,7 @@ public final class ImaAdsLoaderTest {
   private static final Uri TEST_URI = Uri.EMPTY;
   private static final AdMediaInfo TEST_AD_MEDIA_INFO = new AdMediaInfo(TEST_URI.toString());
   private static final long TEST_AD_DURATION_US = 5 * C.MICROS_PER_SECOND;
-  private static final Float[] PREROLL_CUE_POINTS_SECONDS = new Float[] {0f};
+  private static final ImmutableList<Float> PREROLL_CUE_POINTS_SECONDS = ImmutableList.of(0f);
 
   @Rule public final MockitoRule mockito = MockitoJUnit.rule();
 
@@ -105,6 +109,7 @@ public final class ImaAdsLoaderTest {
   @Mock private AdsRequest mockAdsRequest;
   @Mock private AdsManagerLoadedEvent mockAdsManagerLoadedEvent;
   @Mock private com.google.ads.interactivemedia.v3.api.AdsLoader mockAdsLoader;
+  @Mock private FriendlyObstruction mockFriendlyObstruction;
   @Mock private ImaFactory mockImaFactory;
   @Mock private AdPodInfo mockAdPodInfo;
   @Mock private Ad mockPrerollSingleAd;
@@ -113,6 +118,9 @@ public final class ImaAdsLoaderTest {
   private ViewGroup adViewGroup;
   private View adOverlayView;
   private AdsLoader.AdViewProvider adViewProvider;
+  private AdEvent.AdEventListener adEventListener;
+  private ContentProgressProvider contentProgressProvider;
+  private VideoAdPlayer videoAdPlayer;
   private TestAdsLoaderListener adsLoaderListener;
   private FakePlayer fakeExoPlayer;
   private ImaAdsLoader imaAdsLoader;
@@ -156,13 +164,13 @@ public final class ImaAdsLoaderTest {
     setupPlayback(CONTENT_TIMELINE, PREROLL_CUE_POINTS_SECONDS);
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
 
-    verify(mockAdDisplayContainer, atLeastOnce()).setAdContainer(adViewGroup);
-    verify(mockAdDisplayContainer, atLeastOnce()).registerVideoControlsOverlay(adOverlayView);
+    verify(mockImaFactory, atLeastOnce()).createAdDisplayContainer(adViewGroup, videoAdPlayer);
+    verify(mockAdDisplayContainer).registerFriendlyObstruction(mockFriendlyObstruction);
   }
 
   @Test
   public void start_withPlaceholderContent_initializedAdsLoader() {
-    Timeline placeholderTimeline = new DummyTimeline(MediaItem.fromUri(Uri.EMPTY));
+    Timeline placeholderTimeline = new PlaceholderTimeline(MediaItem.fromUri(Uri.EMPTY));
     setupPlayback(placeholderTimeline, PREROLL_CUE_POINTS_SECONDS);
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
 
@@ -191,6 +199,8 @@ public final class ImaAdsLoaderTest {
   @Test
   public void startAndCallbacksAfterRelease() {
     setupPlayback(CONTENT_TIMELINE, PREROLL_CUE_POINTS_SECONDS);
+    // Request ads in order to get a reference to the ad event listener.
+    imaAdsLoader.requestAds(adViewGroup);
     imaAdsLoader.release();
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
     fakeExoPlayer.setPlayingContentPosition(/* position= */ 0);
@@ -201,16 +211,16 @@ public final class ImaAdsLoaderTest {
     // when using Robolectric and accessing VideoProgressUpdate.VIDEO_TIME_NOT_READY, due to the IMA
     // SDK being proguarded.
     imaAdsLoader.requestAds(adViewGroup);
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.LOADED, mockPrerollSingleAd));
-    imaAdsLoader.loadAd(TEST_AD_MEDIA_INFO, mockAdPodInfo);
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.CONTENT_PAUSE_REQUESTED, mockPrerollSingleAd));
-    imaAdsLoader.playAd(TEST_AD_MEDIA_INFO);
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.STARTED, mockPrerollSingleAd));
-    imaAdsLoader.pauseAd(TEST_AD_MEDIA_INFO);
-    imaAdsLoader.stopAd(TEST_AD_MEDIA_INFO);
+    adEventListener.onAdEvent(getAdEvent(AdEventType.LOADED, mockPrerollSingleAd));
+    videoAdPlayer.loadAd(TEST_AD_MEDIA_INFO, mockAdPodInfo);
+    adEventListener.onAdEvent(getAdEvent(AdEventType.CONTENT_PAUSE_REQUESTED, mockPrerollSingleAd));
+    videoAdPlayer.playAd(TEST_AD_MEDIA_INFO);
+    adEventListener.onAdEvent(getAdEvent(AdEventType.STARTED, mockPrerollSingleAd));
+    videoAdPlayer.pauseAd(TEST_AD_MEDIA_INFO);
+    videoAdPlayer.stopAd(TEST_AD_MEDIA_INFO);
     imaAdsLoader.onPlayerError(ExoPlaybackException.createForSource(new IOException()));
     imaAdsLoader.onPositionDiscontinuity(Player.DISCONTINUITY_REASON_SEEK);
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.CONTENT_RESUME_REQUESTED, /* ad= */ null));
+    adEventListener.onAdEvent(getAdEvent(AdEventType.CONTENT_RESUME_REQUESTED, /* ad= */ null));
     imaAdsLoader.handlePrepareError(
         /* adGroupIndex= */ 0, /* adIndexInAdGroup= */ 0, new IOException());
   }
@@ -221,27 +231,27 @@ public final class ImaAdsLoaderTest {
 
     // Load the preroll ad.
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.LOADED, mockPrerollSingleAd));
-    imaAdsLoader.loadAd(TEST_AD_MEDIA_INFO, mockAdPodInfo);
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.CONTENT_PAUSE_REQUESTED, mockPrerollSingleAd));
+    adEventListener.onAdEvent(getAdEvent(AdEventType.LOADED, mockPrerollSingleAd));
+    videoAdPlayer.loadAd(TEST_AD_MEDIA_INFO, mockAdPodInfo);
+    adEventListener.onAdEvent(getAdEvent(AdEventType.CONTENT_PAUSE_REQUESTED, mockPrerollSingleAd));
 
     // Play the preroll ad.
-    imaAdsLoader.playAd(TEST_AD_MEDIA_INFO);
+    videoAdPlayer.playAd(TEST_AD_MEDIA_INFO);
     fakeExoPlayer.setPlayingAdPosition(
         /* adGroupIndex= */ 0,
         /* adIndexInAdGroup= */ 0,
         /* position= */ 0,
         /* contentPosition= */ 0);
     fakeExoPlayer.setState(Player.STATE_READY, true);
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.STARTED, mockPrerollSingleAd));
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.FIRST_QUARTILE, mockPrerollSingleAd));
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.MIDPOINT, mockPrerollSingleAd));
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.THIRD_QUARTILE, mockPrerollSingleAd));
+    adEventListener.onAdEvent(getAdEvent(AdEventType.STARTED, mockPrerollSingleAd));
+    adEventListener.onAdEvent(getAdEvent(AdEventType.FIRST_QUARTILE, mockPrerollSingleAd));
+    adEventListener.onAdEvent(getAdEvent(AdEventType.MIDPOINT, mockPrerollSingleAd));
+    adEventListener.onAdEvent(getAdEvent(AdEventType.THIRD_QUARTILE, mockPrerollSingleAd));
 
     // Play the content.
     fakeExoPlayer.setPlayingContentPosition(0);
-    imaAdsLoader.stopAd(TEST_AD_MEDIA_INFO);
-    imaAdsLoader.onAdEvent(getAdEvent(AdEventType.CONTENT_RESUME_REQUESTED, /* ad= */ null));
+    videoAdPlayer.stopAd(TEST_AD_MEDIA_INFO);
+    adEventListener.onAdEvent(getAdEvent(AdEventType.CONTENT_RESUME_REQUESTED, /* ad= */ null));
 
     // Verify that the preroll ad has been marked as played.
     assertThat(adsLoaderListener.adPlaybackState)
@@ -257,11 +267,11 @@ public final class ImaAdsLoaderTest {
 
   @Test
   public void playback_withPostrollFetchError_marksAdAsInErrorState() {
-    setupPlayback(CONTENT_TIMELINE, new Float[] {-1f});
+    setupPlayback(CONTENT_TIMELINE, ImmutableList.of(-1f));
 
     // Simulate loading an empty postroll ad.
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
-    imaAdsLoader.onAdEvent(mockPostrollFetchErrorAdEvent);
+    adEventListener.onAdEvent(mockPostrollFetchErrorAdEvent);
 
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
@@ -279,9 +289,8 @@ public final class ImaAdsLoaderTest {
     long adGroupTimeUs =
         adGroupPositionInWindowUs
             + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
-    setupPlayback(
-        CONTENT_TIMELINE,
-        new Float[] {(float) adGroupTimeUs / C.MICROS_PER_SECOND});
+    ImmutableList<Float> cuePoints = ImmutableList.of((float) adGroupTimeUs / C.MICROS_PER_SECOND);
+    setupPlayback(CONTENT_TIMELINE, cuePoints);
 
     // Advance playback to just before the midroll and simulate buffering.
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
@@ -289,11 +298,11 @@ public final class ImaAdsLoaderTest {
     fakeExoPlayer.setState(Player.STATE_BUFFERING, /* playWhenReady= */ true);
     // Advance before the timeout and simulating polling content progress.
     ShadowSystemClock.advanceBy(Duration.ofSeconds(1));
-    imaAdsLoader.getContentProgress();
+    contentProgressProvider.getContentProgress();
 
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(/* adGroupTimesUs...= */ adGroupTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US));
   }
 
@@ -304,9 +313,8 @@ public final class ImaAdsLoaderTest {
     long adGroupTimeUs =
         adGroupPositionInWindowUs
             + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
-    setupPlayback(
-        CONTENT_TIMELINE,
-        new Float[] {(float) adGroupTimeUs / C.MICROS_PER_SECOND});
+    ImmutableList<Float> cuePoints = ImmutableList.of((float) adGroupTimeUs / C.MICROS_PER_SECOND);
+    setupPlayback(CONTENT_TIMELINE, cuePoints);
 
     // Advance playback to just before the midroll and simulate buffering.
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
@@ -314,11 +322,11 @@ public final class ImaAdsLoaderTest {
     fakeExoPlayer.setState(Player.STATE_BUFFERING, /* playWhenReady= */ true);
     // Advance past the timeout and simulate polling content progress.
     ShadowSystemClock.advanceBy(Duration.ofSeconds(5));
-    imaAdsLoader.getContentProgress();
+    contentProgressProvider.getContentProgress();
 
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(/* adGroupTimesUs...= */ adGroupTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US)
                 .withAdDurationsUs(new long[][] {{TEST_AD_DURATION_US}})
                 .withAdCount(/* adGroupIndex= */ 0, /* adCount= */ 1)
@@ -330,8 +338,9 @@ public final class ImaAdsLoaderTest {
     long midrollWindowTimeUs = 2 * C.MICROS_PER_SECOND;
     long midrollPeriodTimeUs =
         midrollWindowTimeUs + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
-    setupPlayback(
-        CONTENT_TIMELINE, new Float[] {0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND});
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND);
+    setupPlayback(CONTENT_TIMELINE, cuePoints);
 
     fakeExoPlayer.setPlayingContentPosition(C.usToMs(midrollWindowTimeUs) - 1_000);
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
@@ -339,7 +348,7 @@ public final class ImaAdsLoaderTest {
     verify(mockAdsRenderingSettings, never()).setPlayAdsAfterTime(anyDouble());
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(/* adGroupTimesUs...= */ 0, midrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US));
   }
 
@@ -348,8 +357,9 @@ public final class ImaAdsLoaderTest {
     long midrollWindowTimeUs = 2 * C.MICROS_PER_SECOND;
     long midrollPeriodTimeUs =
         midrollWindowTimeUs + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
-    setupPlayback(
-        CONTENT_TIMELINE, new Float[] {0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND});
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND);
+    setupPlayback(CONTENT_TIMELINE, cuePoints);
 
     fakeExoPlayer.setPlayingContentPosition(C.usToMs(midrollWindowTimeUs));
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
@@ -362,7 +372,7 @@ public final class ImaAdsLoaderTest {
         .of(expectedPlayAdsAfterTimeUs / C.MICROS_PER_SECOND);
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(/* adGroupTimesUs...= */ 0, midrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US)
                 .withSkippedAdGroup(/* adGroupIndex= */ 0));
   }
@@ -372,8 +382,9 @@ public final class ImaAdsLoaderTest {
     long midrollWindowTimeUs = 2 * C.MICROS_PER_SECOND;
     long midrollPeriodTimeUs =
         midrollWindowTimeUs + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
-    setupPlayback(
-        CONTENT_TIMELINE, new Float[] {0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND});
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND);
+    setupPlayback(CONTENT_TIMELINE, cuePoints);
 
     fakeExoPlayer.setPlayingContentPosition(C.usToMs(midrollWindowTimeUs) + 1_000);
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
@@ -386,7 +397,7 @@ public final class ImaAdsLoaderTest {
         .of(expectedPlayAdsAfterTimeUs / C.MICROS_PER_SECOND);
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(/* adGroupTimesUs...= */ 0, midrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US)
                 .withSkippedAdGroup(/* adGroupIndex= */ 0));
   }
@@ -401,12 +412,11 @@ public final class ImaAdsLoaderTest {
     long secondMidrollPeriodTimeUs =
         secondMidrollWindowTimeUs
             + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
-    setupPlayback(
-        CONTENT_TIMELINE,
-        new Float[] {
-          (float) firstMidrollPeriodTimeUs / C.MICROS_PER_SECOND,
-          (float) secondMidrollPeriodTimeUs / C.MICROS_PER_SECOND
-        });
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(
+            (float) firstMidrollPeriodTimeUs / C.MICROS_PER_SECOND,
+            (float) secondMidrollPeriodTimeUs / C.MICROS_PER_SECOND);
+    setupPlayback(CONTENT_TIMELINE, cuePoints);
 
     fakeExoPlayer.setPlayingContentPosition(C.usToMs(secondMidrollWindowTimeUs) - 1_000);
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
@@ -414,8 +424,7 @@ public final class ImaAdsLoaderTest {
     verify(mockAdsRenderingSettings, never()).setPlayAdsAfterTime(anyDouble());
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(
-                    /* adGroupTimesUs...= */ firstMidrollPeriodTimeUs, secondMidrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US));
   }
 
@@ -429,12 +438,11 @@ public final class ImaAdsLoaderTest {
     long secondMidrollPeriodTimeUs =
         secondMidrollWindowTimeUs
             + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
-    setupPlayback(
-        CONTENT_TIMELINE,
-        new Float[] {
-          (float) firstMidrollPeriodTimeUs / C.MICROS_PER_SECOND,
-          (float) secondMidrollPeriodTimeUs / C.MICROS_PER_SECOND
-        });
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(
+            (float) firstMidrollPeriodTimeUs / C.MICROS_PER_SECOND,
+            (float) secondMidrollPeriodTimeUs / C.MICROS_PER_SECOND);
+    setupPlayback(CONTENT_TIMELINE, cuePoints);
 
     fakeExoPlayer.setPlayingContentPosition(C.usToMs(secondMidrollWindowTimeUs));
     imaAdsLoader.start(adsLoaderListener, adViewProvider);
@@ -447,8 +455,7 @@ public final class ImaAdsLoaderTest {
         .of(expectedPlayAdsAfterTimeUs / C.MICROS_PER_SECOND);
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(
-                    /* adGroupTimesUs...= */ firstMidrollPeriodTimeUs, secondMidrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US)
                 .withSkippedAdGroup(/* adGroupIndex= */ 0));
   }
@@ -458,9 +465,11 @@ public final class ImaAdsLoaderTest {
     long midrollWindowTimeUs = 2 * C.MICROS_PER_SECOND;
     long midrollPeriodTimeUs =
         midrollWindowTimeUs + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND);
     setupPlayback(
         CONTENT_TIMELINE,
-        new Float[] {0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND},
+        cuePoints,
         new ImaAdsLoader.Builder(ApplicationProvider.getApplicationContext())
             .setPlayAdBeforeStartPosition(false)
             .setImaFactory(mockImaFactory)
@@ -478,7 +487,7 @@ public final class ImaAdsLoaderTest {
         .of(expectedPlayAdsAfterTimeUs / C.MICROS_PER_SECOND);
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(/* adGroupTimesUs...= */ 0, midrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withSkippedAdGroup(/* adGroupIndex= */ 0)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US));
   }
@@ -488,9 +497,11 @@ public final class ImaAdsLoaderTest {
     long midrollWindowTimeUs = 2 * C.MICROS_PER_SECOND;
     long midrollPeriodTimeUs =
         midrollWindowTimeUs + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND);
     setupPlayback(
         CONTENT_TIMELINE,
-        new Float[] {0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND},
+        cuePoints,
         new ImaAdsLoader.Builder(ApplicationProvider.getApplicationContext())
             .setPlayAdBeforeStartPosition(false)
             .setImaFactory(mockImaFactory)
@@ -508,7 +519,7 @@ public final class ImaAdsLoaderTest {
         .of(expectedPlayAdsAfterTimeUs / C.MICROS_PER_SECOND);
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(/* adGroupTimesUs...= */ 0, midrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US)
                 .withSkippedAdGroup(/* adGroupIndex= */ 0));
   }
@@ -518,9 +529,11 @@ public final class ImaAdsLoaderTest {
     long midrollWindowTimeUs = 2 * C.MICROS_PER_SECOND;
     long midrollPeriodTimeUs =
         midrollWindowTimeUs + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND);
     setupPlayback(
         CONTENT_TIMELINE,
-        new Float[] {0f, (float) midrollPeriodTimeUs / C.MICROS_PER_SECOND},
+        cuePoints,
         new ImaAdsLoader.Builder(ApplicationProvider.getApplicationContext())
             .setPlayAdBeforeStartPosition(false)
             .setImaFactory(mockImaFactory)
@@ -533,7 +546,7 @@ public final class ImaAdsLoaderTest {
     verify(mockAdsManager).destroy();
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(/* adGroupTimesUs...= */ 0, midrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US)
                 .withSkippedAdGroup(/* adGroupIndex= */ 0)
                 .withSkippedAdGroup(/* adGroupIndex= */ 1));
@@ -550,12 +563,13 @@ public final class ImaAdsLoaderTest {
     long secondMidrollPeriodTimeUs =
         secondMidrollWindowTimeUs
             + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(
+            (float) firstMidrollPeriodTimeUs / C.MICROS_PER_SECOND,
+            (float) secondMidrollPeriodTimeUs / C.MICROS_PER_SECOND);
     setupPlayback(
         CONTENT_TIMELINE,
-        new Float[] {
-          (float) firstMidrollPeriodTimeUs / C.MICROS_PER_SECOND,
-          (float) secondMidrollPeriodTimeUs / C.MICROS_PER_SECOND
-        },
+        cuePoints,
         new ImaAdsLoader.Builder(ApplicationProvider.getApplicationContext())
             .setPlayAdBeforeStartPosition(false)
             .setImaFactory(mockImaFactory)
@@ -573,8 +587,7 @@ public final class ImaAdsLoaderTest {
         .of(expectedPlayAdsAfterTimeUs / C.MICROS_PER_SECOND);
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(
-                    /* adGroupTimesUs...= */ firstMidrollPeriodTimeUs, secondMidrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withSkippedAdGroup(/* adGroupIndex= */ 0)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US));
   }
@@ -589,12 +602,13 @@ public final class ImaAdsLoaderTest {
     long secondMidrollPeriodTimeUs =
         secondMidrollWindowTimeUs
             + TimelineWindowDefinition.DEFAULT_WINDOW_OFFSET_IN_FIRST_PERIOD_US;
+    ImmutableList<Float> cuePoints =
+        ImmutableList.of(
+            (float) firstMidrollPeriodTimeUs / C.MICROS_PER_SECOND,
+            (float) secondMidrollPeriodTimeUs / C.MICROS_PER_SECOND);
     setupPlayback(
         CONTENT_TIMELINE,
-        new Float[] {
-          (float) firstMidrollPeriodTimeUs / C.MICROS_PER_SECOND,
-          (float) secondMidrollPeriodTimeUs / C.MICROS_PER_SECOND
-        },
+        cuePoints,
         new ImaAdsLoader.Builder(ApplicationProvider.getApplicationContext())
             .setPlayAdBeforeStartPosition(false)
             .setImaFactory(mockImaFactory)
@@ -612,8 +626,7 @@ public final class ImaAdsLoaderTest {
         .of(expectedPlayAdsAfterTimeUs / C.MICROS_PER_SECOND);
     assertThat(adsLoaderListener.adPlaybackState)
         .isEqualTo(
-            new AdPlaybackState(
-                    /* adGroupTimesUs...= */ firstMidrollPeriodTimeUs, secondMidrollPeriodTimeUs)
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
                 .withContentDurationUs(CONTENT_PERIOD_DURATION_US)
                 .withSkippedAdGroup(/* adGroupIndex= */ 0));
   }
@@ -626,11 +639,60 @@ public final class ImaAdsLoaderTest {
     imaAdsLoader.stop();
 
     InOrder inOrder = inOrder(mockAdDisplayContainer);
-    inOrder.verify(mockAdDisplayContainer).registerVideoControlsOverlay(adOverlayView);
-    inOrder.verify(mockAdDisplayContainer).unregisterAllVideoControlsOverlays();
+    inOrder.verify(mockAdDisplayContainer).registerFriendlyObstruction(mockFriendlyObstruction);
+    inOrder.verify(mockAdDisplayContainer).unregisterAllFriendlyObstructions();
   }
 
-  private void setupPlayback(Timeline contentTimeline, Float[] cuePoints) {
+  @Test
+  public void loadAd_withLargeAdCuePoint_updatesAdPlaybackStateWithLoadedAd() {
+    float midrollTimeSecs = 1_765f;
+    ImmutableList<Float> cuePoints = ImmutableList.of(midrollTimeSecs);
+    setupPlayback(CONTENT_TIMELINE, cuePoints);
+    imaAdsLoader.start(adsLoaderListener, adViewProvider);
+    videoAdPlayer.loadAd(
+        TEST_AD_MEDIA_INFO,
+        new AdPodInfo() {
+          @Override
+          public int getTotalAds() {
+            return 1;
+          }
+
+          @Override
+          public int getAdPosition() {
+            return 1;
+          }
+
+          @Override
+          public boolean isBumper() {
+            return false;
+          }
+
+          @Override
+          public double getMaxDuration() {
+            return 0;
+          }
+
+          @Override
+          public int getPodIndex() {
+            return 0;
+          }
+
+          @Override
+          public double getTimeOffset() {
+            return midrollTimeSecs;
+          }
+        });
+
+    assertThat(adsLoaderListener.adPlaybackState)
+        .isEqualTo(
+            AdPlaybackStateFactory.fromCuePoints(cuePoints)
+                .withContentDurationUs(CONTENT_PERIOD_DURATION_US)
+                .withAdCount(/* adGroupIndex= */ 0, /* adCount= */ 1)
+                .withAdUri(/* adGroupIndex= */ 0, /* adIndexInAdGroup= */ 0, TEST_URI)
+                .withAdDurationsUs(new long[][] {{TEST_AD_DURATION_US}}));
+  }
+
+  private void setupPlayback(Timeline contentTimeline, List<Float> cuePoints) {
     setupPlayback(
         contentTimeline,
         cuePoints,
@@ -641,10 +703,10 @@ public final class ImaAdsLoaderTest {
   }
 
   private void setupPlayback(
-      Timeline contentTimeline, Float[] cuePoints, ImaAdsLoader imaAdsLoader) {
+      Timeline contentTimeline, List<Float> cuePoints, ImaAdsLoader imaAdsLoader) {
     fakeExoPlayer = new FakePlayer();
     adsLoaderListener = new TestAdsLoaderListener(fakeExoPlayer, contentTimeline);
-    when(mockAdsManager.getAdCuePoints()).thenReturn(Arrays.asList(cuePoints));
+    when(mockAdsManager.getAdCuePoints()).thenReturn(cuePoints);
     this.imaAdsLoader = imaAdsLoader;
     imaAdsLoader.setPlayer(fakeExoPlayer);
   }
@@ -656,6 +718,8 @@ public final class ImaAdsLoaderTest {
         .thenAnswer(invocation -> userRequestContextCaptor.getValue());
     List<com.google.ads.interactivemedia.v3.api.AdsLoader.AdsLoadedListener> adsLoadedListeners =
         new ArrayList<>();
+    // Deliberately don't handle removeAdsLoadedListener to allow testing behavior if the IMA SDK
+    // invokes callbacks after release.
     doAnswer(
             invocation -> {
               adsLoadedListeners.add(invocation.getArgument(0));
@@ -663,13 +727,6 @@ public final class ImaAdsLoaderTest {
             })
         .when(mockAdsLoader)
         .addAdsLoadedListener(any());
-    doAnswer(
-            invocation -> {
-              adsLoadedListeners.remove(invocation.getArgument(0));
-              return null;
-            })
-        .when(mockAdsLoader)
-        .removeAdsLoadedListener(any());
     when(mockAdsManagerLoadedEvent.getAdsManager()).thenReturn(mockAdsManager);
     when(mockAdsManagerLoadedEvent.getUserRequestContext())
         .thenAnswer(invocation -> mockAdsRequest.getUserRequestContext());
@@ -685,10 +742,34 @@ public final class ImaAdsLoaderTest {
         .when(mockAdsLoader)
         .requestAds(mockAdsRequest);
 
-    when(mockImaFactory.createAdDisplayContainer()).thenReturn(mockAdDisplayContainer);
+    doAnswer(
+            invocation -> {
+              adEventListener = invocation.getArgument(0);
+              return null;
+            })
+        .when(mockAdsManager)
+        .addAdEventListener(any());
+
+    doAnswer(
+            invocation -> {
+              contentProgressProvider = invocation.getArgument(0);
+              return null;
+            })
+        .when(mockAdsRequest)
+        .setContentProgressProvider(any());
+
+    doAnswer(
+            invocation -> {
+              videoAdPlayer = invocation.getArgument(1);
+              return mockAdDisplayContainer;
+            })
+        .when(mockImaFactory)
+        .createAdDisplayContainer(any(), any());
     when(mockImaFactory.createAdsRenderingSettings()).thenReturn(mockAdsRenderingSettings);
     when(mockImaFactory.createAdsRequest()).thenReturn(mockAdsRequest);
     when(mockImaFactory.createAdsLoader(any(), any(), any())).thenReturn(mockAdsLoader);
+    when(mockImaFactory.createFriendlyObstruction(any(), any(), any()))
+        .thenReturn(mockFriendlyObstruction);
 
     when(mockAdPodInfo.getPodIndex()).thenReturn(0);
     when(mockAdPodInfo.getTotalAds()).thenReturn(1);

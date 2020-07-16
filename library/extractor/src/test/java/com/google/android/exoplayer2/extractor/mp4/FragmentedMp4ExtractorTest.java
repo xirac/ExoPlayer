@@ -37,8 +37,7 @@ public final class FragmentedMp4ExtractorTest {
     return ExtractorAsserts.configs();
   }
 
-  @Parameter(0)
-  public ExtractorAsserts.SimulationConfig simulationConfig;
+  @Parameter public ExtractorAsserts.SimulationConfig simulationConfig;
 
   @Test
   public void sample() throws Exception {
@@ -96,6 +95,14 @@ public final class FragmentedMp4ExtractorTest {
     ExtractorAsserts.assertBehavior(
         getExtractorFactory(ImmutableList.of()),
         "mp4/sample_eac3joc_fragmented.mp4",
+        simulationConfig);
+  }
+
+  @Test
+  public void samplePartiallyFragmented() throws Exception {
+    ExtractorAsserts.assertBehavior(
+        getExtractorFactory(ImmutableList.of()),
+        "mp4/sample_partially_fragmented.mp4",
         simulationConfig);
   }
 

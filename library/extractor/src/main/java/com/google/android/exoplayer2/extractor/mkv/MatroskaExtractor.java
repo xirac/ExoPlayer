@@ -246,8 +246,8 @@ public class MatroskaExtractor implements Extractor {
    * <p>The display time of each subtitle is passed as {@code timeUs} to {@link
    * TrackOutput#sampleMetadata}. The start and end timecodes in this template are relative to
    * {@code timeUs}. Hence the start timecode is always zero. The 12 byte end timecode starting at
-   * {@link #SUBRIP_PREFIX_END_TIMECODE_OFFSET} is set to a dummy value, and must be replaced with
-   * the duration of the subtitle.
+   * {@link #SUBRIP_PREFIX_END_TIMECODE_OFFSET} is set to a placeholder value, and must be replaced
+   * with the duration of the subtitle.
    *
    * <p>Equivalent to the UTF-8 string: "1\n00:00:00,000 --> 00:00:00,000\n".
    */
@@ -281,8 +281,8 @@ public class MatroskaExtractor implements Extractor {
    * <p>The display time of each subtitle is passed as {@code timeUs} to {@link
    * TrackOutput#sampleMetadata}. The start and end timecodes in this template are relative to
    * {@code timeUs}. Hence the start timecode is always zero. The 12 byte end timecode starting at
-   * {@link #SUBRIP_PREFIX_END_TIMECODE_OFFSET} is set to a dummy value, and must be replaced with
-   * the duration of the subtitle.
+   * {@link #SUBRIP_PREFIX_END_TIMECODE_OFFSET} is set to a placeholder value, and must be replaced
+   * with the duration of the subtitle.
    *
    * <p>Equivalent to the UTF-8 string: "Dialogue: 0:00:00:00,0:00:00:00,".
    */
@@ -1196,11 +1196,9 @@ public class MatroskaExtractor implements Extractor {
 
           int timecode = (scratch.data[0] << 8) | (scratch.data[1] & 0xFF);
           blockTimeUs = clusterTimecodeUs + scaleTimecodeToUs(timecode);
-          boolean isInvisible = (scratch.data[2] & 0x08) == 0x08;
           boolean isKeyframe = track.type == TRACK_TYPE_AUDIO
               || (id == ID_SIMPLE_BLOCK && (scratch.data[2] & 0x80) == 0x80);
-          blockFlags = (isKeyframe ? C.BUFFER_FLAG_KEY_FRAME : 0)
-              | (isInvisible ? C.BUFFER_FLAG_DECODE_ONLY : 0);
+          blockFlags = isKeyframe ? C.BUFFER_FLAG_KEY_FRAME : 0;
           blockState = BLOCK_STATE_DATA;
           blockSampleIndex = 0;
         }
@@ -2100,7 +2098,7 @@ public class MatroskaExtractor implements Extractor {
         formatBuilder
             .setChannelCount(channelCount)
             .setSampleRate(sampleRate)
-            .setPcmEncoding(pcmEncoding);
+            .setEncoding(pcmEncoding);
       } else if (MimeTypes.isVideo(mimeType)) {
         type = C.TRACK_TYPE_VIDEO;
         if (displayUnit == Track.DISPLAY_UNIT_PIXELS) {

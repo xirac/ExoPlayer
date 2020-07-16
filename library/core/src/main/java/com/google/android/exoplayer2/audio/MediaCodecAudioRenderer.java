@@ -32,12 +32,14 @@ import com.google.android.exoplayer2.PlayerMessage.Target;
 import com.google.android.exoplayer2.RendererCapabilities;
 import com.google.android.exoplayer2.audio.AudioRendererEventListener.EventDispatcher;
 import com.google.android.exoplayer2.decoder.DecoderInputBuffer;
+import com.google.android.exoplayer2.mediacodec.MediaCodecAdapter;
 import com.google.android.exoplayer2.mediacodec.MediaCodecInfo;
 import com.google.android.exoplayer2.mediacodec.MediaCodecRenderer;
 import com.google.android.exoplayer2.mediacodec.MediaCodecSelector;
 import com.google.android.exoplayer2.mediacodec.MediaCodecUtil;
 import com.google.android.exoplayer2.mediacodec.MediaCodecUtil.DecoderQueryException;
 import com.google.android.exoplayer2.mediacodec.MediaFormatUtil;
+import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.MediaClock;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.Util;
@@ -82,14 +84,15 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
   private final AudioSink audioSink;
 
   private int codecMaxInputSize;
-  private boolean passthroughEnabled;
   private boolean codecNeedsDiscardChannelsWorkaround;
   private boolean codecNeedsEosBufferTimestampWorkaround;
-  @Nullable private Format passthroughFormat;
+  @Nullable private Format codecPassthroughFormat;
   @Nullable private Format inputFormat;
   private long currentPositionUs;
   private boolean allowFirstBufferPositionDiscontinuity;
   private boolean allowPositionDiscontinuity;
+
+  @Nullable private WakeupListener wakeupListener;
 
   /**
    * @param context A context.
@@ -215,20 +218,23 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
     }
     @TunnelingSupport
     int tunnelingSupport = Util.SDK_INT >= 21 ? TUNNELING_SUPPORTED : TUNNELING_NOT_SUPPORTED;
+    boolean formatHasDrm = format.drmInitData != null || format.exoMediaCryptoType != null;
     boolean supportsFormatDrm = supportsFormatDrm(format);
-    // In passthrough mode, if DRM init data is present we need to use a passthrough decoder to
-    // decrypt the content. For passthrough of clear content we don't need a decoder at all.
+    // In passthrough mode, if the format needs decryption then we need to use a passthrough
+    // decoder. Else we don't don't need a decoder at all.
     if (supportsFormatDrm
         && usePassthrough(format)
-        && (format.drmInitData == null || MediaCodecUtil.getPassthroughDecoderInfo() != null)) {
+        && (!formatHasDrm || MediaCodecUtil.getPassthroughDecoderInfo() != null)) {
       return RendererCapabilities.create(FORMAT_HANDLED, ADAPTIVE_NOT_SEAMLESS, tunnelingSupport);
     }
-    if ((MimeTypes.AUDIO_RAW.equals(format.sampleMimeType)
-            && !audioSink.supportsOutput(
-                format.channelCount, format.sampleRate, format.pcmEncoding))
-        || !audioSink.supportsOutput(
-            format.channelCount, format.sampleRate, C.ENCODING_PCM_16BIT)) {
-      // Assume the decoder outputs 16-bit PCM, unless the input is raw.
+    // If the input is PCM then it will be passed directly to the sink. Hence the sink must support
+    // the input format directly.
+    if (MimeTypes.AUDIO_RAW.equals(format.sampleMimeType) && !audioSink.supportsFormat(format)) {
+      return RendererCapabilities.create(FORMAT_UNSUPPORTED_SUBTYPE);
+    }
+    // For all other input formats, we expect the decoder to output 16-bit PCM.
+    if (!audioSink.supportsFormat(
+        Util.getPcmFormat(C.ENCODING_PCM_16BIT, format.channelCount, format.sampleRate))) {
       return RendererCapabilities.create(FORMAT_UNSUPPORTED_SUBTYPE);
     }
     List<MediaCodecInfo> decoderInfos =
@@ -289,36 +295,27 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
   @Override
   protected void configureCodec(
       MediaCodecInfo codecInfo,
-      MediaCodec codec,
+      MediaCodecAdapter codecAdapter,
       Format format,
       @Nullable MediaCrypto crypto,
       float codecOperatingRate) {
     codecMaxInputSize = getCodecMaxInputSize(codecInfo, format, getStreamFormats());
     codecNeedsDiscardChannelsWorkaround = codecNeedsDiscardChannelsWorkaround(codecInfo.name);
     codecNeedsEosBufferTimestampWorkaround = codecNeedsEosBufferTimestampWorkaround(codecInfo.name);
-    passthroughEnabled =
-        MimeTypes.AUDIO_RAW.equals(codecInfo.mimeType)
-            && !MimeTypes.AUDIO_RAW.equals(format.sampleMimeType);
     MediaFormat mediaFormat =
         getMediaFormat(format, codecInfo.codecMimeType, codecMaxInputSize, codecOperatingRate);
-    codec.configure(mediaFormat, /* surface= */ null, crypto, /* flags= */ 0);
+    codecAdapter.configure(mediaFormat, /* surface= */ null, crypto, /* flags= */ 0);
     // Store the input MIME type if we're using the passthrough codec.
-    passthroughFormat = passthroughEnabled ? format : null;
+    boolean codecPassthroughEnabled =
+        MimeTypes.AUDIO_RAW.equals(codecInfo.mimeType)
+            && !MimeTypes.AUDIO_RAW.equals(format.sampleMimeType);
+    codecPassthroughFormat = codecPassthroughEnabled ? format : null;
   }
 
   @Override
   protected @KeepCodecResult int canKeepCodec(
       MediaCodec codec, MediaCodecInfo codecInfo, Format oldFormat, Format newFormat) {
-    // TODO: We currently rely on recreating the codec when encoder delay or padding is non-zero.
-    // Re-creating the codec is necessary to guarantee that onOutputMediaFormatChanged is called,
-    // which is where encoder delay and padding are propagated to the sink. We should find a better
-    // way to propagate these values, and then allow the codec to be re-used in cases where this
-    // would otherwise be possible.
-    if (getCodecMaxInputSize(codecInfo, newFormat) > codecMaxInputSize
-        || oldFormat.encoderDelay != 0
-        || oldFormat.encoderPadding != 0
-        || newFormat.encoderDelay != 0
-        || newFormat.encoderPadding != 0) {
+    if (getCodecMaxInputSize(codecInfo, newFormat) > codecMaxInputSize) {
       return KEEP_CODEC_RESULT_NO;
     } else if (codecInfo.isSeamlessAdaptationSupported(
         oldFormat, newFormat, /* isNewFormatComplete= */ true)) {
@@ -347,7 +344,7 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
     return Util.areEqual(oldFormat.sampleMimeType, newFormat.sampleMimeType)
         && oldFormat.channelCount == newFormat.channelCount
         && oldFormat.sampleRate == newFormat.sampleRate
-        && oldFormat.pcmEncoding == newFormat.pcmEncoding
+        && oldFormat.encoding == newFormat.encoding
         && oldFormat.initializationDataEquals(newFormat)
         && !MimeTypes.AUDIO_OPUS.equals(oldFormat.sampleMimeType);
   }
@@ -387,58 +384,46 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
   }
 
   @Override
-  protected void onOutputMediaFormatChanged(MediaCodec codec, MediaFormat outputMediaFormat)
-      throws ExoPlaybackException {
-    @C.Encoding int encoding;
-    int channelCount;
-    int sampleRate;
-    if (passthroughFormat != null) {
-      encoding = getPassthroughEncoding(passthroughFormat);
-      channelCount = passthroughFormat.channelCount;
-      sampleRate = passthroughFormat.sampleRate;
-    } else {
-      if (outputMediaFormat.containsKey(VIVO_BITS_PER_SAMPLE_KEY)) {
-        encoding = Util.getPcmEncoding(outputMediaFormat.getInteger(VIVO_BITS_PER_SAMPLE_KEY));
-      } else {
-        encoding = getPcmEncoding(inputFormat);
-      }
-      channelCount = outputMediaFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
-      sampleRate = outputMediaFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE);
-    }
-    @Nullable int[] channelMap = null;
-    if (codecNeedsDiscardChannelsWorkaround && channelCount == 6 && inputFormat.channelCount < 6) {
-      channelMap = new int[inputFormat.channelCount];
-      for (int i = 0; i < inputFormat.channelCount; i++) {
-        channelMap[i] = i;
-      }
-    }
-    try {
-      audioSink.configure(
-          encoding,
-          channelCount,
-          sampleRate,
-          /* specifiedBufferSize= */ 0,
-          channelMap,
-          inputFormat.encoderDelay,
-          inputFormat.encoderPadding);
-    } catch (AudioSink.ConfigurationException e) {
-      // TODO(internal: b/145658993) Use outputFormat instead.
-      throw createRendererException(e, inputFormat);
-    }
+  protected void onOutputFormatChanged(Format outputFormat) throws ExoPlaybackException {
+    configureOutput(outputFormat);
   }
 
   @Override
-  protected void onOutputPassthroughFormatChanged(Format outputFormat) throws ExoPlaybackException {
-    @C.Encoding int encoding = getPassthroughEncoding(outputFormat);
+  protected void configureOutput(Format outputFormat) throws ExoPlaybackException {
+    Format audioSinkInputFormat;
+    @Nullable int[] channelMap = null;
+    if (codecPassthroughFormat != null) { // Raw codec passthrough
+      audioSinkInputFormat = getFormatWithEncodingForPassthrough(codecPassthroughFormat);
+    } else if (getCodec() == null) { // Codec bypass passthrough
+      audioSinkInputFormat = getFormatWithEncodingForPassthrough(outputFormat);
+    } else {
+      MediaFormat mediaFormat = getCodec().getOutputFormat();
+      @C.PcmEncoding int pcmEncoding;
+      if (mediaFormat.containsKey(VIVO_BITS_PER_SAMPLE_KEY)) {
+        pcmEncoding = Util.getPcmEncoding(mediaFormat.getInteger(VIVO_BITS_PER_SAMPLE_KEY));
+      } else {
+        pcmEncoding = getPcmEncoding(outputFormat);
+      }
+      audioSinkInputFormat =
+          new Format.Builder()
+              .setSampleMimeType(MimeTypes.AUDIO_RAW)
+              .setEncoding(pcmEncoding)
+              .setEncoderDelay(outputFormat.encoderDelay)
+              .setEncoderPadding(outputFormat.encoderPadding)
+              .setChannelCount(mediaFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT))
+              .setSampleRate(mediaFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE))
+              .build();
+      if (codecNeedsDiscardChannelsWorkaround
+          && audioSinkInputFormat.channelCount == 6
+          && outputFormat.channelCount < 6) {
+        channelMap = new int[outputFormat.channelCount];
+        for (int i = 0; i < outputFormat.channelCount; i++) {
+          channelMap[i] = i;
+        }
+      }
+    }
     try {
-      audioSink.configure(
-          encoding,
-          outputFormat.channelCount,
-          outputFormat.sampleRate,
-          /* specifiedBufferSize= */ 0,
-          /* outputChannels= */ null,
-          outputFormat.encoderDelay,
-          outputFormat.encoderPadding);
+      audioSink.configure(audioSinkInputFormat, /* specifiedBufferSize= */ 0, channelMap);
     } catch (AudioSink.ConfigurationException e) {
       throw createRendererException(e, outputFormat);
     }
@@ -461,16 +446,22 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
     }
     if (MimeTypes.AUDIO_E_AC3_JOC.equals(mimeType)) {
       // E-AC3 JOC is object-based so the output channel count is arbitrary.
-      if (audioSink.supportsOutput(
-          /* channelCount= */ Format.NO_VALUE, format.sampleRate, C.ENCODING_E_AC3_JOC)) {
-        return MimeTypes.getEncoding(MimeTypes.AUDIO_E_AC3_JOC, format.codecs);
+      Format eAc3JocFormat =
+          format
+              .buildUpon()
+              .setChannelCount(Format.NO_VALUE)
+              .setEncoding(C.ENCODING_E_AC3_JOC)
+              .build();
+      if (audioSink.supportsFormat(eAc3JocFormat)) {
+        return C.ENCODING_E_AC3_JOC;
       }
       // E-AC3 receivers can decode JOC streams, but in 2-D rather than 3-D, so try to fall back.
       mimeType = MimeTypes.AUDIO_E_AC3;
     }
 
     @C.Encoding int encoding = MimeTypes.getEncoding(mimeType, format.codecs);
-    if (audioSink.supportsOutput(format.channelCount, format.sampleRate, encoding)) {
+    Format passthroughFormat = format.buildUpon().setEncoding(encoding).build();
+    if (audioSink.supportsFormat(passthroughFormat)) {
       return encoding;
     } else {
       return C.ENCODING_INVALID;
@@ -631,9 +622,10 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
       bufferPresentationTimeUs = getLargestQueuedPresentationTimeUs();
     }
 
-    if (passthroughEnabled && (bufferFlags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+    if (codecPassthroughFormat != null
+        && (bufferFlags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
       // Discard output buffers from the passthrough (raw) decoder containing codec specific data.
-      codec.releaseOutputBuffer(bufferIndex, false);
+      Assertions.checkNotNull(codec).releaseOutputBuffer(bufferIndex, false);
       return true;
     }
 
@@ -641,7 +633,7 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
       if (codec != null) {
         codec.releaseOutputBuffer(bufferIndex, false);
       }
-      decoderCounters.skippedOutputBufferCount++;
+      decoderCounters.skippedOutputBufferCount += sampleCount;
       audioSink.handleDiscontinuity();
       return true;
     }
@@ -658,7 +650,7 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
       if (codec != null) {
         codec.releaseOutputBuffer(bufferIndex, false);
       }
-      decoderCounters.renderedOutputBufferCount++;
+      decoderCounters.renderedOutputBufferCount += sampleCount;
       return true;
     }
 
@@ -694,6 +686,9 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
         break;
       case MSG_SET_AUDIO_SESSION_ID:
         audioSink.setAudioSessionId((Integer) message);
+        break;
+      case MSG_SET_WAKEUP_LISTENER:
+        this.wakeupListener = (WakeupListener) message;
         break;
       default:
         super.handleMessage(messageType, message);
@@ -796,6 +791,13 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
     }
   }
 
+  private Format getFormatWithEncodingForPassthrough(Format outputFormat) {
+    @C.Encoding int passthroughEncoding = getPassthroughEncoding(outputFormat);
+    // TODO(b/112299307): Passthrough can have become unavailable since usePassthrough was called.
+    Assertions.checkState(passthroughEncoding != C.ENCODING_INVALID);
+    return outputFormat.buildUpon().setEncoding(passthroughEncoding).build();
+  }
+
   /**
    * Returns whether the device's decoders are known to not support setting the codec operating
    * rate.
@@ -844,7 +846,7 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
     // If the format is anything other than PCM then we assume that the audio decoder will output
     // 16-bit PCM.
     return MimeTypes.AUDIO_RAW.equals(format.sampleMimeType)
-        ? format.pcmEncoding
+        ? format.encoding
         : C.ENCODING_PCM_16BIT;
   }
 
@@ -873,6 +875,20 @@ public class MediaCodecAudioRenderer extends MediaCodecRenderer implements Media
     public void onSkipSilenceEnabledChanged(boolean skipSilenceEnabled) {
       eventDispatcher.skipSilenceEnabledChanged(skipSilenceEnabled);
       onAudioTrackSkipSilenceEnabledChanged(skipSilenceEnabled);
+    }
+
+    @Override
+    public void onOffloadBufferEmptying() {
+      if (wakeupListener != null) {
+        wakeupListener.onWakeup();
+      }
+    }
+
+    @Override
+    public void onOffloadBufferFull(long bufferEmptyingDeadlineMs) {
+      if (wakeupListener != null) {
+        wakeupListener.onSleep(bufferEmptyingDeadlineMs);
+      }
     }
   }
 }

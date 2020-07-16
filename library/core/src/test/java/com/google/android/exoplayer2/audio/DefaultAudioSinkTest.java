@@ -15,12 +15,15 @@
  */
 package com.google.android.exoplayer2.audio;
 
+import static com.google.android.exoplayer2.audio.AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY;
+import static com.google.android.exoplayer2.audio.AudioSink.SINK_FORMAT_SUPPORTED_WITH_TRANSCODING;
 import static com.google.common.truth.Truth.assertThat;
 import static org.robolectric.annotation.Config.OLDEST_SDK;
 import static org.robolectric.annotation.Config.TARGET_SDK;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.C;
+import com.google.android.exoplayer2.Format;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
@@ -50,6 +53,11 @@ public final class DefaultAudioSinkTest {
   private static final int SAMPLE_RATE_44_1 = 44100;
   private static final int TRIM_100_MS_FRAME_COUNT = 4410;
   private static final int TRIM_10_MS_FRAME_COUNT = 441;
+  private static final Format STEREO_44_1_FORMAT =
+      new Format.Builder()
+          .setChannelCount(CHANNEL_COUNT_STEREO)
+          .setSampleRate(SAMPLE_RATE_44_1)
+          .build();
 
   private DefaultAudioSink defaultAudioSink;
   private ArrayAudioBufferSink arrayAudioBufferSink;
@@ -198,33 +206,57 @@ public final class DefaultAudioSinkTest {
         .isEqualTo(8 * C.MICROS_PER_SECOND);
   }
 
+  @Test
+  public void floatPcmNeedsTranscodingIfFloatOutputDisabled() {
+    defaultAudioSink =
+        new DefaultAudioSink(
+            AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES,
+            new AudioProcessor[0],
+            /* enableFloatOutput= */ false);
+    Format floatFormat = STEREO_44_1_FORMAT.buildUpon().setEncoding(C.ENCODING_PCM_FLOAT).build();
+    assertThat(defaultAudioSink.getFormatSupport(floatFormat))
+        .isEqualTo(SINK_FORMAT_SUPPORTED_WITH_TRANSCODING);
+  }
+
   @Config(minSdk = OLDEST_SDK, maxSdk = 20)
   @Test
-  public void doesNotSupportFloatOutputBeforeApi21() {
-    assertThat(
-            defaultAudioSink.supportsOutput(
-                CHANNEL_COUNT_STEREO, SAMPLE_RATE_44_1, C.ENCODING_PCM_FLOAT))
-        .isFalse();
+  public void floatPcmNeedsTranscodingIfFloatOutputEnabledBeforeApi21() {
+    defaultAudioSink =
+        new DefaultAudioSink(
+            AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES,
+            new AudioProcessor[0],
+            /* enableFloatOutput= */ true);
+    Format floatFormat = STEREO_44_1_FORMAT.buildUpon().setEncoding(C.ENCODING_PCM_FLOAT).build();
+    assertThat(defaultAudioSink.getFormatSupport(floatFormat))
+        .isEqualTo(SINK_FORMAT_SUPPORTED_WITH_TRANSCODING);
   }
 
   @Config(minSdk = 21, maxSdk = TARGET_SDK)
   @Test
-  public void supportsFloatOutputFromApi21() {
-    assertThat(
-            defaultAudioSink.supportsOutput(
-                CHANNEL_COUNT_STEREO, SAMPLE_RATE_44_1, C.ENCODING_PCM_FLOAT))
-        .isTrue();
+  public void floatOutputSupportedIfFloatOutputEnabledFromApi21() {
+    defaultAudioSink =
+        new DefaultAudioSink(
+            AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES,
+            new AudioProcessor[0],
+            /* enableFloatOutput= */ true);
+    Format floatFormat = STEREO_44_1_FORMAT.buildUpon().setEncoding(C.ENCODING_PCM_FLOAT).build();
+    assertThat(defaultAudioSink.getFormatSupport(floatFormat))
+        .isEqualTo(SINK_FORMAT_SUPPORTED_DIRECTLY);
   }
 
   @Test
-  public void audioSinkWithAacAudioCapabilitiesWithoutOffload_doesNotSupportAacOutput() {
+  public void supportsFloatPcm() {
+    Format floatFormat = STEREO_44_1_FORMAT.buildUpon().setEncoding(C.ENCODING_PCM_FLOAT).build();
+    assertThat(defaultAudioSink.supportsFormat(floatFormat)).isTrue();
+  }
+
+  @Test
+  public void audioSinkWithAacAudioCapabilitiesWithoutOffload_doesNotSupportAac() {
     DefaultAudioSink defaultAudioSink =
         new DefaultAudioSink(
             new AudioCapabilities(new int[] {C.ENCODING_AAC_LC}, 2), new AudioProcessor[0]);
-    assertThat(
-            defaultAudioSink.supportsOutput(
-                CHANNEL_COUNT_STEREO, SAMPLE_RATE_44_1, C.ENCODING_AAC_LC))
-        .isFalse();
+    Format aacLcFormat = STEREO_44_1_FORMAT.buildUpon().setEncoding(C.ENCODING_AAC_LC).build();
+    assertThat(defaultAudioSink.supportsFormat(aacLcFormat)).isFalse();
   }
 
   private void configureDefaultAudioSink(int channelCount) throws AudioSink.ConfigurationException {
@@ -233,14 +265,15 @@ public final class DefaultAudioSinkTest {
 
   private void configureDefaultAudioSink(int channelCount, int trimStartFrames, int trimEndFrames)
       throws AudioSink.ConfigurationException {
-    defaultAudioSink.configure(
-        C.ENCODING_PCM_16BIT,
-        channelCount,
-        SAMPLE_RATE_44_1,
-        /* specifiedBufferSize= */ 0,
-        /* outputChannels= */ null,
-        /* trimStartFrames= */ trimStartFrames,
-        /* trimEndFrames= */ trimEndFrames);
+    Format format =
+        new Format.Builder()
+            .setEncoding(C.ENCODING_PCM_16BIT)
+            .setChannelCount(channelCount)
+            .setSampleRate(SAMPLE_RATE_44_1)
+            .setEncoderDelay(trimStartFrames)
+            .setEncoderPadding(trimEndFrames)
+            .build();
+    defaultAudioSink.configure(format, /* specifiedBufferSize= */ 0, /* outputChannels= */ null);
   }
 
   /** Creates a one second silence buffer for 44.1 kHz stereo 16-bit audio. */

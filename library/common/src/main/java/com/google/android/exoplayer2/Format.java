@@ -20,7 +20,9 @@ import android.os.Parcelable;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.drm.DrmInitData;
 import com.google.android.exoplayer2.drm.ExoMediaCrypto;
+import com.google.android.exoplayer2.drm.UnsupportedMediaCrypto;
 import com.google.android.exoplayer2.metadata.Metadata;
+import com.google.android.exoplayer2.util.Assertions;
 import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.Util;
 import com.google.android.exoplayer2.video.ColorInfo;
@@ -94,7 +96,7 @@ import java.util.List;
  * <ul>
  *   <li>{@link #channelCount}
  *   <li>{@link #sampleRate}
- *   <li>{@link #pcmEncoding}
+ *   <li>{@link #encoding}
  *   <li>{@link #encoderDelay}
  *   <li>{@link #encoderPadding}
  * </ul>
@@ -155,7 +157,7 @@ public final class Format implements Parcelable {
 
     private int channelCount;
     private int sampleRate;
-    @C.PcmEncoding private int pcmEncoding;
+    @C.Encoding private int encoding;
     private int encoderDelay;
     private int encoderPadding;
 
@@ -183,7 +185,7 @@ public final class Format implements Parcelable {
       // Audio specific.
       channelCount = NO_VALUE;
       sampleRate = NO_VALUE;
-      pcmEncoding = NO_VALUE;
+      encoding = NO_VALUE;
       // Text specific.
       accessibilityChannel = NO_VALUE;
     }
@@ -223,7 +225,7 @@ public final class Format implements Parcelable {
       // Audio specific.
       this.channelCount = format.channelCount;
       this.sampleRate = format.sampleRate;
-      this.pcmEncoding = format.pcmEncoding;
+      this.encoding = format.encoding;
       this.encoderDelay = format.encoderDelay;
       this.encoderPadding = format.encoderPadding;
       // Text specific.
@@ -528,13 +530,13 @@ public final class Format implements Parcelable {
     }
 
     /**
-     * Sets {@link Format#pcmEncoding}. The default value is {@link #NO_VALUE}.
+     * Sets {@link Format#encoding}. The default value is {@link #NO_VALUE}.
      *
-     * @param pcmEncoding The {@link Format#pcmEncoding}.
+     * @param encoding The {@link Format#encoding}.
      * @return The builder.
      */
-    public Builder setPcmEncoding(@C.PcmEncoding int pcmEncoding) {
-      this.pcmEncoding = pcmEncoding;
+    public Builder setEncoding(@C.Encoding int encoding) {
+      this.encoding = encoding;
       return this;
     }
 
@@ -616,7 +618,7 @@ public final class Format implements Parcelable {
           colorInfo,
           channelCount,
           sampleRate,
-          pcmEncoding,
+          encoding,
           encoderDelay,
           encoderPadding,
           accessibilityChannel,
@@ -765,8 +767,10 @@ public final class Format implements Parcelable {
    * The audio sampling rate in Hz, or {@link #NO_VALUE} if unknown or not applicable.
    */
   public final int sampleRate;
-  /** The {@link C.PcmEncoding} for PCM audio. Set to {@link #NO_VALUE} for other media types. */
-  @C.PcmEncoding public final int pcmEncoding;
+  /** @deprecated Use {@link #encoding}. */
+  @Deprecated @C.PcmEncoding public final int pcmEncoding;
+  /** The {@link C.Encoding} for audio. Set to {@link #NO_VALUE} for other media types. */
+  @C.Encoding public final int encoding;
   /**
    * The number of frames to trim from the start of the decoded audio stream, or 0 if not
    * applicable.
@@ -785,9 +789,9 @@ public final class Format implements Parcelable {
   // Provided by source.
 
   /**
-   * The type of the {@link ExoMediaCrypto} provided by the media source, if the media source can
-   * acquire a DRM session for {@link #drmInitData}. Null if the media source cannot acquire a
-   * session for {@link #drmInitData}, or if not applicable.
+   * The type of the {@link ExoMediaCrypto} that the source will associate to the content that this
+   * format describes, or null if the source will not associate an {@link ExoMediaCrypto}. Cannot be
+   * null if {@link #drmInitData} is not null.
    */
   @Nullable public final Class<? extends ExoMediaCrypto> exoMediaCryptoType;
 
@@ -1004,7 +1008,7 @@ public final class Format implements Parcelable {
       int maxInputSize,
       int channelCount,
       int sampleRate,
-      @C.PcmEncoding int pcmEncoding,
+      @C.Encoding int encoding,
       @Nullable List<byte[]> initializationData,
       @Nullable DrmInitData drmInitData,
       @C.SelectionFlags int selectionFlags,
@@ -1022,7 +1026,7 @@ public final class Format implements Parcelable {
         .setDrmInitData(drmInitData)
         .setChannelCount(channelCount)
         .setSampleRate(sampleRate)
-        .setPcmEncoding(pcmEncoding)
+        .setEncoding(encoding)
         .build();
   }
 
@@ -1036,7 +1040,7 @@ public final class Format implements Parcelable {
       int maxInputSize,
       int channelCount,
       int sampleRate,
-      @C.PcmEncoding int pcmEncoding,
+      @C.Encoding int encoding,
       int encoderDelay,
       int encoderPadding,
       @Nullable List<byte[]> initializationData,
@@ -1058,7 +1062,7 @@ public final class Format implements Parcelable {
         .setDrmInitData(drmInitData)
         .setChannelCount(channelCount)
         .setSampleRate(sampleRate)
-        .setPcmEncoding(pcmEncoding)
+        .setEncoding(encoding)
         .setEncoderDelay(encoderDelay)
         .setEncoderPadding(encoderPadding)
         .build();
@@ -1239,7 +1243,7 @@ public final class Format implements Parcelable {
       // Audio specific.
       int channelCount,
       int sampleRate,
-      @C.PcmEncoding int pcmEncoding,
+      @C.Encoding int encoding,
       int encoderDelay,
       int encoderPadding,
       // Text specific.
@@ -1277,12 +1281,20 @@ public final class Format implements Parcelable {
     // Audio specific.
     this.channelCount = channelCount;
     this.sampleRate = sampleRate;
-    this.pcmEncoding = pcmEncoding;
+    this.encoding = encoding;
+    this.pcmEncoding = toPcmEncoding(encoding);
     this.encoderDelay = encoderDelay == NO_VALUE ? 0 : encoderDelay;
     this.encoderPadding = encoderPadding == NO_VALUE ? 0 : encoderPadding;
     // Text specific.
     this.accessibilityChannel = accessibilityChannel;
     // Provided by source.
+    if (exoMediaCryptoType == null && drmInitData != null) {
+      // Described content is encrypted but no exoMediaCryptoType has been assigned. Use
+      // UnsupportedMediaCrypto (not supported by any Renderers), so MediaSources are forced to
+      // replace
+      // this value in order to have Renderers flag this Format as supported.
+      exoMediaCryptoType = UnsupportedMediaCrypto.class;
+    }
     this.exoMediaCryptoType = exoMediaCryptoType;
   }
 
@@ -1306,7 +1318,7 @@ public final class Format implements Parcelable {
     int initializationDataSize = in.readInt();
     initializationData = new ArrayList<>(initializationDataSize);
     for (int i = 0; i < initializationDataSize; i++) {
-      initializationData.add(in.createByteArray());
+      initializationData.add(Assertions.checkNotNull(in.createByteArray()));
     }
     drmInitData = in.readParcelable(DrmInitData.class.getClassLoader());
     subsampleOffsetUs = in.readLong();
@@ -1323,13 +1335,17 @@ public final class Format implements Parcelable {
     // Audio specific.
     channelCount = in.readInt();
     sampleRate = in.readInt();
-    pcmEncoding = in.readInt();
+    encoding = in.readInt();
+    pcmEncoding = toPcmEncoding(encoding);
     encoderDelay = in.readInt();
     encoderPadding = in.readInt();
     // Text specific.
     accessibilityChannel = in.readInt();
     // Provided by source.
-    exoMediaCryptoType = null;
+    // If the described content is encrypted. Use UnsupportedMediaCrypto (not supported by any
+    // Renderers), so MediaSources are forced to replace this value in order to have Renderers flag
+    // this Format as supported.
+    exoMediaCryptoType = drmInitData != null ? UnsupportedMediaCrypto.class : null;
   }
 
   /** Returns a {@link Format.Builder} initialized with the values of this instance. */
@@ -1551,7 +1567,7 @@ public final class Format implements Parcelable {
       // Audio specific.
       result = 31 * result + channelCount;
       result = 31 * result + sampleRate;
-      result = 31 * result + pcmEncoding;
+      result = 31 * result + encoding;
       result = 31 * result + encoderDelay;
       result = 31 * result + encoderPadding;
       // Text specific.
@@ -1588,7 +1604,7 @@ public final class Format implements Parcelable {
         && stereoMode == other.stereoMode
         && channelCount == other.channelCount
         && sampleRate == other.sampleRate
-        && pcmEncoding == other.pcmEncoding
+        && encoding == other.encoding
         && encoderDelay == other.encoderDelay
         && encoderPadding == other.encoderPadding
         && accessibilityChannel == other.accessibilityChannel
@@ -1709,7 +1725,7 @@ public final class Format implements Parcelable {
     // Audio specific.
     dest.writeInt(channelCount);
     dest.writeInt(sampleRate);
-    dest.writeInt(pcmEncoding);
+    dest.writeInt(encoding);
     dest.writeInt(encoderDelay);
     dest.writeInt(encoderPadding);
     // Text specific.
@@ -1729,4 +1745,9 @@ public final class Format implements Parcelable {
     }
 
   };
+
+  @C.PcmEncoding
+  private static int toPcmEncoding(@C.Encoding int encoding) {
+    return Util.isEncodingLinearPcm(encoding) ? encoding : NO_VALUE;
+  }
 }

@@ -156,7 +156,7 @@ public final class DownloadHelper {
   public static RendererCapabilities[] getRendererCapabilities(RenderersFactory renderersFactory) {
     Renderer[] renderers =
         renderersFactory.createRenderers(
-            Util.createHandler(),
+            Util.createHandlerForCurrentOrMainLooper(),
             new VideoRendererEventListener() {},
             new AudioRendererEventListener() {},
             (cues) -> {},
@@ -429,7 +429,7 @@ public final class DownloadHelper {
   }
 
   /**
-   * Equivalent to {@link #createMediaSource(DownloadRequest, Factory, DrmSessionManager)
+   * Equivalent to {@link #createMediaSource(DownloadRequest, DataSource.Factory, DrmSessionManager)
    * createMediaSource(downloadRequest, dataSourceFactory, null)}.
    */
   public static MediaSource createMediaSource(
@@ -500,8 +500,8 @@ public final class DownloadHelper {
         new DefaultTrackSelector(trackSelectorParameters, new DownloadTrackSelection.Factory());
     this.rendererCapabilities = rendererCapabilities;
     this.scratchSet = new SparseIntArray();
-    trackSelector.init(/* listener= */ () -> {}, new DummyBandwidthMeter());
-    callbackHandler = new Handler(Util.getLooper());
+    trackSelector.init(/* listener= */ () -> {}, new FakeBandwidthMeter());
+    callbackHandler = Util.createHandlerForCurrentOrMainLooper();
     window = new Timeline.Window();
   }
 
@@ -919,6 +919,7 @@ public final class DownloadHelper {
         return DownloadRequest.TYPE_HLS;
       case C.TYPE_SS:
         return DownloadRequest.TYPE_SS;
+      case C.TYPE_OTHER:
       default:
         return DownloadRequest.TYPE_PROGRESSIVE;
     }
@@ -970,7 +971,8 @@ public final class DownloadHelper {
       allocator = new DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE);
       pendingMediaPeriods = new ArrayList<>();
       @SuppressWarnings("methodref.receiver.bound.invalid")
-      Handler downloadThreadHandler = Util.createHandler(this::handleDownloadHelperCallbackMessage);
+      Handler downloadThreadHandler =
+          Util.createHandlerForCurrentOrMainLooper(this::handleDownloadHelperCallbackMessage);
       this.downloadHelperHandler = downloadThreadHandler;
       mediaSourceThread = new HandlerThread("ExoPlayer:DownloadHelper");
       mediaSourceThread.start();
@@ -1151,7 +1153,7 @@ public final class DownloadHelper {
     }
   }
 
-  private static final class DummyBandwidthMeter implements BandwidthMeter {
+  private static final class FakeBandwidthMeter implements BandwidthMeter {
 
     @Override
     public long getBitrateEstimate() {

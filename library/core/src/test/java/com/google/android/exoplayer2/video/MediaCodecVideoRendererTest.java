@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer2.video;
 
+import static com.google.android.exoplayer2.testutil.FakeSampleStream.FakeSampleStreamItem.format;
+import static com.google.android.exoplayer2.testutil.FakeSampleStream.FakeSampleStreamItem.oneByteSample;
 import static com.google.common.truth.Truth.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -38,6 +40,7 @@ import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.Renderer;
 import com.google.android.exoplayer2.RendererCapabilities;
 import com.google.android.exoplayer2.RendererConfiguration;
+import com.google.android.exoplayer2.drm.DrmSessionEventListener;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
 import com.google.android.exoplayer2.mediacodec.MediaCodecInfo;
 import com.google.android.exoplayer2.mediacodec.MediaCodecSelector;
@@ -45,8 +48,8 @@ import com.google.android.exoplayer2.mediacodec.MediaCodecUtil.DecoderQueryExcep
 import com.google.android.exoplayer2.testutil.FakeSampleStream;
 import com.google.android.exoplayer2.testutil.FakeSampleStream.FakeSampleStreamItem;
 import com.google.android.exoplayer2.util.MimeTypes;
+import com.google.common.collect.ImmutableList;
 import java.util.Collections;
-import java.util.List;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -78,11 +81,8 @@ public class MediaCodecVideoRendererTest {
   @Before
   public void setUp() throws Exception {
     MediaCodecSelector mediaCodecSelector =
-        new MediaCodecSelector() {
-          @Override
-          public List<MediaCodecInfo> getDecoderInfos(
-              String mimeType, boolean requiresSecureDecoder, boolean requiresTunnelingDecoder) {
-            return Collections.singletonList(
+        (mimeType, requiresSecureDecoder, requiresTunnelingDecoder) ->
+            Collections.singletonList(
                 MediaCodecInfo.newInstance(
                     /* name= */ "name",
                     /* mimeType= */ mimeType,
@@ -93,8 +93,6 @@ public class MediaCodecVideoRendererTest {
                     /* vendor= */ false,
                     /* forceDisableAdaptive= */ false,
                     /* forceSecure= */ false));
-          }
-        };
 
     mediaCodecVideoRenderer =
         new MediaCodecVideoRenderer(
@@ -126,15 +124,15 @@ public class MediaCodecVideoRendererTest {
   public void render_dropsLateBuffer() throws Exception {
     FakeSampleStream fakeSampleStream =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50_000,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME), // First buffer.
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME), // Late buffer.
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME), // Last buffer.
-            FakeSampleStreamItem.END_OF_STREAM_ITEM);
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(
+                oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME), // First buffer.
+                oneByteSample(/* timeUs= */ 50_000), // Late buffer.
+                oneByteSample(/* timeUs= */ 100_000), // Last buffer.
+                FakeSampleStreamItem.END_OF_STREAM_ITEM));
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,
         new Format[] {VIDEO_H264},
@@ -163,13 +161,13 @@ public class MediaCodecVideoRendererTest {
         RendererConfiguration.DEFAULT,
         new Format[] {VIDEO_H264},
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 0,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME),
-            FakeSampleStreamItem.END_OF_STREAM_ITEM),
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(
+                oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME),
+                FakeSampleStreamItem.END_OF_STREAM_ITEM)),
         /* positionUs= */ 0,
         /* joining= */ false,
         /* mayRenderStartOfStream= */ true,
@@ -201,12 +199,11 @@ public class MediaCodecVideoRendererTest {
 
     FakeSampleStream fakeSampleStream =
         new FakeSampleStream(
-            /* format= */ pAsp1,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 5000,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ pAsp1,
+            ImmutableList.of(oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME)));
 
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,
@@ -220,16 +217,12 @@ public class MediaCodecVideoRendererTest {
     mediaCodecVideoRenderer.render(/* positionUs= */ 0, SystemClock.elapsedRealtime() * 1000);
     mediaCodecVideoRenderer.render(/* positionUs= */ 250, SystemClock.elapsedRealtime() * 1000);
 
-    fakeSampleStream.addFakeSampleStreamItem(new FakeSampleStreamItem(pAsp2));
-    fakeSampleStream.addFakeSampleStreamItem(
-        new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
-    fakeSampleStream.addFakeSampleStreamItem(
-        new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
-    fakeSampleStream.addFakeSampleStreamItem(new FakeSampleStreamItem(pAsp3));
-    fakeSampleStream.addFakeSampleStreamItem(
-        new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
-    fakeSampleStream.addFakeSampleStreamItem(
-        new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
+    fakeSampleStream.addFakeSampleStreamItem(format(pAsp2));
+    fakeSampleStream.addFakeSampleStreamItem(oneByteSample(/* timeUs= */ 5_000));
+    fakeSampleStream.addFakeSampleStreamItem(oneByteSample(/* timeUs= */ 10_000));
+    fakeSampleStream.addFakeSampleStreamItem(format(pAsp3));
+    fakeSampleStream.addFakeSampleStreamItem(oneByteSample(/* timeUs= */ 15_000));
+    fakeSampleStream.addFakeSampleStreamItem(oneByteSample(/* timeUs= */ 20_000));
     fakeSampleStream.addFakeSampleStreamItem(FakeSampleStreamItem.END_OF_STREAM_ITEM);
     mediaCodecVideoRenderer.setCurrentStreamFinal();
 
@@ -251,12 +244,11 @@ public class MediaCodecVideoRendererTest {
       throws Exception {
     FakeSampleStream fakeSampleStream =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME)));
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,
         new Format[] {VIDEO_H264},
@@ -271,7 +263,7 @@ public class MediaCodecVideoRendererTest {
     mediaCodecVideoRenderer.resetPosition(0);
     mediaCodecVideoRenderer.setCurrentStreamFinal();
     fakeSampleStream.addFakeSampleStreamItem(
-        new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
+        oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME));
     fakeSampleStream.addFakeSampleStreamItem(FakeSampleStreamItem.END_OF_STREAM_ITEM);
     int positionUs = 10;
     do {
@@ -286,12 +278,11 @@ public class MediaCodecVideoRendererTest {
   public void enable_withMayRenderStartOfStream_rendersFirstFrameBeforeStart() throws Exception {
     FakeSampleStream fakeSampleStream =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME)));
 
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,
@@ -313,12 +304,11 @@ public class MediaCodecVideoRendererTest {
       throws Exception {
     FakeSampleStream fakeSampleStream =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(oneByteSample(/* timeUs= */ 0)));
 
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,
@@ -339,12 +329,11 @@ public class MediaCodecVideoRendererTest {
   public void enable_withoutMayRenderStartOfStream_rendersFirstFrameAfterStart() throws Exception {
     FakeSampleStream fakeSampleStream =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME));
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME)));
 
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,
@@ -366,22 +355,22 @@ public class MediaCodecVideoRendererTest {
   public void replaceStream_whenStarted_rendersFirstFrameOfNewStream() throws Exception {
     FakeSampleStream fakeSampleStream1 =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME),
-            FakeSampleStreamItem.END_OF_STREAM_ITEM);
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(
+                oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME),
+                FakeSampleStreamItem.END_OF_STREAM_ITEM));
     FakeSampleStream fakeSampleStream2 =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME),
-            FakeSampleStreamItem.END_OF_STREAM_ITEM);
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(
+                oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME),
+                FakeSampleStreamItem.END_OF_STREAM_ITEM));
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,
         new Format[] {VIDEO_H264},
@@ -410,22 +399,22 @@ public class MediaCodecVideoRendererTest {
   public void replaceStream_whenNotStarted_doesNotRenderFirstFrameOfNewStream() throws Exception {
     FakeSampleStream fakeSampleStream1 =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME),
-            FakeSampleStreamItem.END_OF_STREAM_ITEM);
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(
+                oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME),
+                FakeSampleStreamItem.END_OF_STREAM_ITEM));
     FakeSampleStream fakeSampleStream2 =
         new FakeSampleStream(
-            /* format= */ VIDEO_H264,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(new byte[] {0}, C.BUFFER_FLAG_KEY_FRAME),
-            FakeSampleStreamItem.END_OF_STREAM_ITEM);
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ VIDEO_H264,
+            ImmutableList.of(
+                oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME),
+                FakeSampleStreamItem.END_OF_STREAM_ITEM));
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,
         new Format[] {VIDEO_H264},
@@ -458,26 +447,24 @@ public class MediaCodecVideoRendererTest {
   public void onVideoFrameProcessingOffset_isCalledAfterOutputFormatChanges()
       throws ExoPlaybackException {
     Format mp4Uhd = VIDEO_H264.buildUpon().setWidth(3840).setHeight(2160).build();
-    byte[] sampleData = new byte[0];
     FakeSampleStream fakeSampleStream =
         new FakeSampleStream(
-            /* format= */ mp4Uhd,
+            /* mediaSourceEventDispatcher= */ null,
             DrmSessionManager.DUMMY,
-            /* eventDispatcher= */ null,
-            /* firstSampleTimeUs= */ 0,
-            /* timeUsIncrement= */ 50,
-            new FakeSampleStreamItem(mp4Uhd),
-            new FakeSampleStreamItem(sampleData, C.BUFFER_FLAG_KEY_FRAME),
-            new FakeSampleStreamItem(VIDEO_H264),
-            new FakeSampleStreamItem(sampleData, C.BUFFER_FLAG_KEY_FRAME),
-            new FakeSampleStreamItem(sampleData, C.BUFFER_FLAG_KEY_FRAME),
-            new FakeSampleStreamItem(mp4Uhd),
-            new FakeSampleStreamItem(sampleData, C.BUFFER_FLAG_KEY_FRAME),
-            new FakeSampleStreamItem(sampleData, C.BUFFER_FLAG_KEY_FRAME),
-            new FakeSampleStreamItem(sampleData, C.BUFFER_FLAG_KEY_FRAME),
-            new FakeSampleStreamItem(VIDEO_H264),
-            new FakeSampleStreamItem(sampleData, C.BUFFER_FLAG_KEY_FRAME),
-            FakeSampleStreamItem.END_OF_STREAM_ITEM);
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ mp4Uhd,
+            ImmutableList.of(
+                oneByteSample(/* timeUs= */ 0, C.BUFFER_FLAG_KEY_FRAME),
+                format(VIDEO_H264),
+                oneByteSample(/* timeUs= */ 50, C.BUFFER_FLAG_KEY_FRAME),
+                oneByteSample(/* timeUs= */ 100),
+                format(mp4Uhd),
+                oneByteSample(/* timeUs= */ 150, C.BUFFER_FLAG_KEY_FRAME),
+                oneByteSample(/* timeUs= */ 200),
+                oneByteSample(/* timeUs= */ 250),
+                format(VIDEO_H264),
+                oneByteSample(/* timeUs= */ 300, C.BUFFER_FLAG_KEY_FRAME),
+                FakeSampleStreamItem.END_OF_STREAM_ITEM));
 
     mediaCodecVideoRenderer.enable(
         RendererConfiguration.DEFAULT,

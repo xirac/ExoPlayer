@@ -56,7 +56,7 @@ public final class ConcatenatingMediaSource extends CompositeMediaSource<MediaSo
   private static final int MSG_UPDATE_TIMELINE = 4;
   private static final int MSG_ON_COMPLETION = 5;
 
-  private static final MediaItem DUMMY_MEDIA_ITEM =
+  private static final MediaItem EMPTY_MEDIA_ITEM =
       new MediaItem.Builder().setUri(Uri.EMPTY).build();
 
   // Accessed on any thread.
@@ -72,7 +72,7 @@ public final class ConcatenatingMediaSource extends CompositeMediaSource<MediaSo
 
   // Accessed on the playback thread only.
   private final List<MediaSourceHolder> mediaSourceHolders;
-  private final Map<MediaPeriod, MediaSourceHolder> mediaSourceByMediaPeriod;
+  private final IdentityHashMap<MediaPeriod, MediaSourceHolder> mediaSourceByMediaPeriod;
   private final Map<Object, MediaSourceHolder> mediaSourceByUid;
   private final Set<MediaSourceHolder> enabledMediaSourceHolders;
   private final boolean isAtomic;
@@ -442,11 +442,11 @@ public final class ConcatenatingMediaSource extends CompositeMediaSource<MediaSo
 
   // CompositeMediaSource implementation.
 
-  // TODO(bachinger): add @Override annotation once the method is defined by MediaSource.
+  @Override
   public MediaItem getMediaItem() {
     // This method is actually never called because getInitialTimeline is implemented and hence the
-    // MaskingMediaSource does not need to create a dummy timeline for this media source.
-    return DUMMY_MEDIA_ITEM;
+    // MaskingMediaSource does not need to create a placeholder timeline for this media source.
+    return EMPTY_MEDIA_ITEM;
   }
 
   @Override
@@ -476,7 +476,7 @@ public final class ConcatenatingMediaSource extends CompositeMediaSource<MediaSo
     @Nullable MediaSourceHolder holder = mediaSourceByUid.get(mediaSourceHolderUid);
     if (holder == null) {
       // Stale event. The media source has already been removed.
-      holder = new MediaSourceHolder(new DummyMediaSource(), useLazyPreparation);
+      holder = new MediaSourceHolder(new FakeMediaSource(), useLazyPreparation);
       holder.isRemoved = true;
       prepareChildSource(holder, holder.mediaSource);
     }
@@ -988,17 +988,17 @@ public final class ConcatenatingMediaSource extends CompositeMediaSource<MediaSo
     }
   }
 
-  /** Dummy media source which does nothing and does not support creating periods. */
-  private static final class DummyMediaSource extends BaseMediaSource {
+  /** A media source which does nothing and does not support creating periods. */
+  private static final class FakeMediaSource extends BaseMediaSource {
 
     @Override
     protected void prepareSourceInternal(@Nullable TransferListener mediaTransferListener) {
       // Do nothing.
     }
 
-    // TODO(bachinger): add @Override annotation once the method is defined by MediaSource.
+    @Override
     public MediaItem getMediaItem() {
-      return DUMMY_MEDIA_ITEM;
+      return EMPTY_MEDIA_ITEM;
     }
 
     @Override

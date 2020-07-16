@@ -95,7 +95,6 @@ public final class TtmlDecoder extends SimpleSubtitleDecoder {
       new CellResolution(/* columns= */ 32, /* rows= */ 15);
 
   private final XmlPullParserFactory xmlParserFactory;
-  private TtmlRegion previousTtmlRegion = null;
 
   public TtmlDecoder() {
     super("TtmlDecoder");
@@ -370,17 +369,12 @@ public final class TtmlDecoder extends SimpleSubtitleDecoder {
       }
     } else {
       Log.w(TAG, "Ignoring region without an origin");
+      return null;
       // TODO: Should default to top left as below in this case, but need to fix
       // https://github.com/google/ExoPlayer/issues/2953 first.
       // Origin is omitted. Default to top left.
       // position = 0;
       // line = 0;
-      if (previousTtmlRegion != null) {
-        position = previousTtmlRegion.position;
-        line = previousTtmlRegion.line;
-      } else {
-        return null;
-      }
     }
 
     float width;
@@ -421,17 +415,12 @@ public final class TtmlDecoder extends SimpleSubtitleDecoder {
       }
     } else {
       Log.w(TAG, "Ignoring region without an extent");
+      return null;
       // TODO: Should default to extent of parent as below in this case, but need to fix
       // https://github.com/google/ExoPlayer/issues/2953 first.
       // Extent is omitted. Default to extent of parent.
       // width = 1;
       // height = 1;
-      if (previousTtmlRegion != null) {
-        width = previousTtmlRegion.width;
-        height = previousTtmlRegion.height;
-      } else {
-        return null;
-      }
     }
 
     @Cue.AnchorType int lineAnchor = Cue.ANCHOR_TYPE_START;
@@ -455,17 +444,26 @@ public final class TtmlDecoder extends SimpleSubtitleDecoder {
     }
 
     float regionTextHeight = 1.0f / cellResolution.rows;
-    previousTtmlRegion = new TtmlRegion(
-        regionId,
-        position,
-        line,
-        /* lineType= */ Cue.LINE_TYPE_FRACTION,
-        lineAnchor,
-        width,
-        height,
-        /* textSizeType= */ Cue.TEXT_SIZE_TYPE_FRACTIONAL_IGNORE_PADDING,
-        /* textSize= */ regionTextHeight
-    );
+
+    @Cue.VerticalType int verticalType = Cue.TYPE_UNSET;
+    @Nullable
+    String writingDirection =
+        XmlPullParserUtil.getAttributeValue(xmlParser, TtmlNode.ATTR_TTS_WRITING_MODE);
+    if (writingDirection != null) {
+      switch (Util.toLowerInvariant(writingDirection)) {
+          // TODO: Support horizontal RTL modes.
+        case TtmlNode.VERTICAL:
+        case TtmlNode.VERTICAL_LR:
+          verticalType = Cue.VERTICAL_TYPE_LR;
+          break;
+        case TtmlNode.VERTICAL_RL:
+          verticalType = Cue.VERTICAL_TYPE_RL;
+          break;
+        default:
+          // ignore
+          break;
+      }
+    }
     return new TtmlRegion(
         regionId,
         position,
@@ -475,7 +473,8 @@ public final class TtmlDecoder extends SimpleSubtitleDecoder {
         width,
         height,
         /* textSizeType= */ Cue.TEXT_SIZE_TYPE_FRACTIONAL_IGNORE_PADDING,
-        /* textSize= */ regionTextHeight);
+        /* textSize= */ regionTextHeight,
+        verticalType);
   }
 
   private static String[] parseStyleIds(String parentStyleIds) {
@@ -607,21 +606,6 @@ public final class TtmlDecoder extends SimpleSubtitleDecoder {
               break;
             case TtmlNode.NO_UNDERLINE:
               style = createIfNull(style).setUnderline(false);
-              break;
-          }
-          break;
-        case TtmlNode.ATTR_TTS_WRITING_MODE:
-          switch (Util.toLowerInvariant(attributeValue)) {
-              // TODO: Support horizontal RTL modes.
-            case TtmlNode.VERTICAL:
-            case TtmlNode.VERTICAL_LR:
-              style = createIfNull(style).setVerticalType(Cue.VERTICAL_TYPE_LR);
-              break;
-            case TtmlNode.VERTICAL_RL:
-              style = createIfNull(style).setVerticalType(Cue.VERTICAL_TYPE_RL);
-              break;
-            default:
-              // ignore
               break;
           }
           break;

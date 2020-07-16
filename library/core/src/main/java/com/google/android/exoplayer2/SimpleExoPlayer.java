@@ -199,7 +199,7 @@ public class SimpleExoPlayer extends BasePlayer
       this.loadControl = loadControl;
       this.bandwidthMeter = bandwidthMeter;
       this.analyticsCollector = analyticsCollector;
-      looper = Util.getLooper();
+      looper = Util.getCurrentOrMainLooper();
       audioAttributes = AudioAttributes.DEFAULT;
       wakeMode = C.WAKE_MODE_NONE;
       videoScalingMode = Renderer.VIDEO_SCALING_MODE_DEFAULT;
@@ -497,7 +497,6 @@ public class SimpleExoPlayer extends BasePlayer
   private final CopyOnWriteArraySet<DeviceListener> deviceListeners;
   private final CopyOnWriteArraySet<VideoRendererEventListener> videoDebugListeners;
   private final CopyOnWriteArraySet<AudioRendererEventListener> audioDebugListeners;
-  private final BandwidthMeter bandwidthMeter;
   private final AnalyticsCollector analyticsCollector;
   private final AudioBecomingNoisyManager audioBecomingNoisyManager;
   private final AudioFocusManager audioFocusManager;
@@ -559,7 +558,6 @@ public class SimpleExoPlayer extends BasePlayer
 
   /** @param builder The {@link Builder} to obtain all construction parameters. */
   protected SimpleExoPlayer(Builder builder) {
-    bandwidthMeter = builder.bandwidthMeter;
     analyticsCollector = builder.analyticsCollector;
     priorityTaskManager = builder.priorityTaskManager;
     audioAttributes = builder.audioAttributes;
@@ -594,22 +592,19 @@ public class SimpleExoPlayer extends BasePlayer
             builder.trackSelector,
             builder.mediaSourceFactory,
             builder.loadControl,
-            bandwidthMeter,
+            builder.bandwidthMeter,
             analyticsCollector,
             builder.useLazyPreparation,
             builder.seekParameters,
             builder.pauseAtEndOfMediaItems,
             builder.clock,
             builder.looper);
-    analyticsCollector.setPlayer(player);
-    player.addListener(analyticsCollector);
     player.addListener(componentListener);
     videoDebugListeners.add(analyticsCollector);
     videoListeners.add(analyticsCollector);
     audioDebugListeners.add(analyticsCollector);
     audioListeners.add(analyticsCollector);
     addMetadataOutput(analyticsCollector);
-    bandwidthMeter.addEventListener(eventHandler, analyticsCollector);
 
     audioBecomingNoisyManager =
         new AudioBecomingNoisyManager(builder.context, eventHandler, componentListener);
@@ -631,6 +626,11 @@ public class SimpleExoPlayer extends BasePlayer
     sendRendererMessage(C.TRACK_TYPE_VIDEO, Renderer.MSG_SET_SCALING_MODE, videoScalingMode);
     sendRendererMessage(
         C.TRACK_TYPE_AUDIO, Renderer.MSG_SET_SKIP_SILENCE_ENABLED, skipSilenceEnabled);
+  }
+
+  @Override
+  public void experimental_enableOffloadScheduling(boolean enableOffloadScheduling) {
+    player.experimental_enableOffloadScheduling(enableOffloadScheduling);
   }
 
   @Override
@@ -1028,7 +1028,6 @@ public class SimpleExoPlayer extends BasePlayer
   }
 
   /** @deprecated Use {@link #setPlaybackSpeed(float)} instead. */
-  @SuppressWarnings("deprecation")
   @Deprecated
   @RequiresApi(23)
   public void setPlaybackParams(@Nullable PlaybackParams params) {
@@ -1694,7 +1693,6 @@ public class SimpleExoPlayer extends BasePlayer
       Assertions.checkNotNull(priorityTaskManager).remove(C.PRIORITY_PLAYBACK);
       isPriorityTaskManagerRegistered = false;
     }
-    bandwidthMeter.removeEventListener(analyticsCollector);
     currentCues = Collections.emptyList();
     playerReleased = true;
   }
